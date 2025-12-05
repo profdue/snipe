@@ -99,7 +99,7 @@ class CompletePhantomPredictor:
             stats['away_last10_gpg'], 10, context['avg_gpg']
         )
         stats['away_last10_gapg_adj'] = self._bayesian_adjust(
-            stats['away_last10_gpg'], 10, context['avg_gpg']
+            stats['away_last10_gapg'], 10, context['avg_gapg']
         )
         
         # Apply momentum to last 5 stats
@@ -429,9 +429,9 @@ class CompletePhantomPredictor:
         
         if rule_number == 5 and prediction == "No Bet":
             return (f"No clear statistical edge. Bayesian adjusted metrics don't meet criteria. "
-                   f"Home: {stats['home_attack_final']:.2f} attack, {stats['home_defense_final']:.2f} defense. "
-                   f"Away: {stats['away_attack_final']:.2f} attack, {stats['away_defense_final']:.2f} defense. "
-                   f"xG hybrid: {(stats['home_hybrid_gpg'] + stats['away_hybrid_gpg'])/2:.2f}.")
+                    f"Home: {stats['home_attack_final']:.2f} attack, {stats['home_defense_final']:.2f} defense. "
+                    f"Away: {stats['away_attack_final']:.2f} attack, {stats['away_defense_final']:.2f} defense. "
+                    f"xG hybrid: {(stats['home_hybrid_gpg'] + stats['away_hybrid_gpg'])/2:.2f}.")
         
         return explanations.get(rule_number, f"{confidence} confidence {prediction} based on comprehensive statistical analysis.")
     
