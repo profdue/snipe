@@ -38,6 +38,45 @@ class CompletePhantomPredictor:
         # xG weight (60% actual, 40% xG)
         self.xg_weight = 0.4
         
+        # Template-based explanations
+        self._init_explanation_templates()
+        
+    def _init_explanation_templates(self):
+        """Initialize explanation templates for cleaner code"""
+        self.explanation_templates = {
+            1: (
+                "High Confidence {prediction}: Both teams average >1.5 goals per game in adjusted "
+                "last 10 AND last 5 metrics. Home: {home_last10_gpg_adj:.2f} → {home_last5_gpg_adj:.2f} GPG "
+                "({home_momentum}). Away: {away_last10_gpg_adj:.2f} → {away_last5_gpg_adj:.2f} GPG ({away_momentum}). "
+                "xG hybrid: {xg_avg:.2f}. Edge: {edge:.1f}%."
+            ),
+            2: (
+                "High Confidence {prediction}: Strong adjusted defense (<1.0 GApg) vs weak adjusted attack "
+                "(<1.5 GPG) in both periods. Home defense: {home_last10_gapg_adj:.2f} → {home_last5_gapg_adj:.2f} GApg "
+                "({home_momentum}). Away attack: {away_last10_gpg_adj:.2f} → {away_last5_gpg_adj:.2f} GPG "
+                "({away_momentum}). Expected goals: {home_attack_final:.2f} vs {away_attack_final:.2f}. "
+                "Edge: {edge:.1f}%."
+            ),
+            3: (
+                "Moderate Confidence {prediction}: Strong attacking form in last 5 matches (>1.5 GPG). "
+                "Home: {home_last5_gpg_adj:.2f} GPG ({home_momentum}). "
+                "Away: {away_last5_gpg_adj:.2f} GPG ({away_momentum}). "
+                "Poisson probability: {probability:.1%}. Edge: {edge:.1f}%."
+            ),
+            4: (
+                "Moderate Confidence {prediction}: Recent defensive strength vs attacking weakness. "
+                "Home defense (last5): {home_last5_gapg_adj:.2f} GApg. "
+                "Away attack (last5): {away_last5_gpg_adj:.2f} GPG. "
+                "Momentum: Home {home_momentum}, Away {away_momentum}. Edge: {edge:.1f}%."
+            ),
+            5: (
+                "Low Confidence {prediction}: xG-based prediction with slight statistical edge. "
+                "xG advantage: {xg_avg:.2f}. "
+                "Expected total goals: {total_goals:.2f}. "
+                "Poisson probability: {probability:.1%}. Edge: {edge:.1f}%."
+            )
+        }
+        
     def poisson_pmf(self, k: int, lambd: float) -> float:
         """Calculate Poisson probability mass function"""
         return (lambd ** k * math.exp(-lambd)) / math.factorial(k)
@@ -398,42 +437,40 @@ class CompletePhantomPredictor:
     
     def _generate_explanation(self, prediction: str, confidence: str, rule_number: int, 
                             stats: Dict, probability: float, edge: float) -> str:
-        """Generate detailed explanation for the prediction"""
-        
-        explanations = {
-            1: f"High Confidence {prediction}: Both teams average >1.5 goals per game in adjusted last 10 AND last 5 metrics. "
-                f"Home: {stats['home_last10_gpg_adj']:.2f} → {stats['home_last5_gpg_adj']:.2f} GPG ({stats['home_momentum']}). "
-                f"Away: {stats['away_last10_gpg_adj']:.2f} → {stats['away_last5_gpg_adj']:.2f} GPG ({stats['away_momentum']}). "
-                f"xG hybrid: {(stats['home_hybrid_gpg'] + stats['away_hybrid_gpg'])/2:.2f}. Edge: {edge:.1f}%.",
-            
-            2: f"High Confidence {prediction}: Strong adjusted defense (<1.0 GApg) vs weak adjusted attack (<1.5 GPG) in both periods. "
-                f"Home defense: {stats['home_last10_gapg_adj']:.2f} → {stats['home_last5_gapg_adj']:.2f} GApg ({stats['home_momentum']}). "
-                f"Away attack: {stats['away_last10_gpg_adj']:.2f} → {stats['away_last5_gpg_adj']:.2f} GPG ({stats['away_momentum']}). "
-                f"Expected goals: {stats['home_attack_final']:.2f} vs {stats['away_attack_final']:.2f}. Edge: {edge:.1f}%.",
-            
-            3: f"Moderate Confidence {prediction}: Strong attacking form in last 5 matches (>1.5 GPG). "
-                f"Home: {stats['home_last5_gpg_adj']:.2f} GPG ({stats['home_momentum']}). "
-                f"Away: {stats['away_last5_gpg_adj']:.2f} GPG ({stats['away_momentum']}). "
-                f"Poisson probability: {probability:.1%}. Edge: {edge:.1f}%.",
-            
-            4: f"Moderate Confidence {prediction}: Recent defensive strength vs attacking weakness. "
-                f"Home defense (last5): {stats['home_last5_gapg_adj']:.2f} GApg. "
-                f"Away attack (last5): {stats['away_last5_gpg_adj']:.2f} GPG. "
-                f"Momentum: Home {stats['home_momentum']}, Away {stats['away_momentum']}. Edge: {edge:.1f}%.",
-            
-            5: f"Low Confidence {prediction}: xG-based prediction with slight statistical edge. "
-                f"xG advantage: {(stats['home_hybrid_gpg'] + stats['away_hybrid_gpg'])/2:.2f}. "
-                f"Expected total goals: {stats['home_attack_final'] + stats['away_attack_final']:.2f}. "
-                f"Poisson probability: {probability:.1%}. Edge: {edge:.1f}%."
-        }
+        """Generate detailed explanation for the prediction using templates"""
         
         if rule_number == 5 and prediction == "No Bet":
-            return (f"No clear statistical edge. Bayesian adjusted metrics don't meet criteria. "
-                    f"Home: {stats['home_attack_final']:.2f} attack, {stats['home_defense_final']:.2f} defense. "
-                    f"Away: {stats['away_attack_final']:.2f} attack, {stats['away_defense_final']:.2f} defense. "
-                    f"xG hybrid: {(stats['home_hybrid_gpg'] + stats['away_hybrid_gpg'])/2:.2f}.")
+            return (
+                f"No clear statistical edge. Bayesian adjusted metrics don't meet criteria. "
+                f"Home: {stats['home_attack_final']:.2f} attack, {stats['home_defense_final']:.2f} defense. "
+                f"Away: {stats['away_attack_final']:.2f} attack, {stats['away_defense_final']:.2f} defense. "
+                f"xG hybrid: {(stats['home_hybrid_gpg'] + stats['away_hybrid_gpg'])/2:.2f}."
+            )
         
-        return explanations.get(rule_number, f"{confidence} confidence {prediction} based on comprehensive statistical analysis.")
+        # Prepare template variables
+        template_vars = {
+            'prediction': prediction,
+            'home_last10_gpg_adj': stats['home_last10_gpg_adj'],
+            'home_last5_gpg_adj': stats['home_last5_gpg_adj'],
+            'home_momentum': stats['home_momentum'],
+            'away_last10_gpg_adj': stats['away_last10_gpg_adj'],
+            'away_last5_gpg_adj': stats['away_last5_gpg_adj'],
+            'away_momentum': stats['away_momentum'],
+            'xg_avg': (stats['home_hybrid_gpg'] + stats['away_hybrid_gpg']) / 2,
+            'edge': edge,
+            'home_last10_gapg_adj': stats['home_last10_gapg_adj'],
+            'home_last5_gapg_adj': stats['home_last5_gapg_adj'],
+            'home_attack_final': stats['home_attack_final'],
+            'away_attack_final': stats['away_attack_final'],
+            'probability': probability,
+            'total_goals': stats['home_attack_final'] + stats['away_attack_final']
+        }
+        
+        template = self.explanation_templates.get(rule_number)
+        if template:
+            return template.format(**template_vars)
+        
+        return f"{confidence} confidence {prediction} based on comprehensive statistical analysis."
     
     def batch_predict(self, matches: list, market_odds_list: list, league: str = "default") -> list:
         """Predict multiple matches at once"""
@@ -462,7 +499,6 @@ class CompletePhantomPredictor:
                 odds = pred['market_odds']
                 
                 # Simulate outcome (for testing, you'd use actual results)
-                # Here we use the probability to determine outcome
                 import random
                 if random.random() < pred['probability']:
                     # Win
@@ -492,3 +528,29 @@ class CompletePhantomPredictor:
             'bankroll_history': bankroll_history,
             'bet_history': bet_history
         }
+
+
+# Unit tests for the predictor
+def test_predictor():
+    """Simple unit tests for the CompletePhantomPredictor"""
+    predictor = CompletePhantomPredictor()
+    
+    # Test 1: Poisson PMF
+    assert predictor.poisson_pmf(0, 0) == 1.0, "Poisson(0, 0) should be 1.0"
+    assert predictor.poisson_pmf(0, 1) == math.exp(-1), "Poisson(0, 1) should be e^-1"
+    
+    # Test 2: Bayesian adjustment
+    adj = predictor._bayesian_adjust(2.0, 5, 1.5)
+    assert adj > 1.5 and adj < 2.0, "Should shrink toward mean"
+    
+    # Test 3: Form momentum
+    momentum, mult = predictor._calculate_form_momentum(2.0, 1.5)
+    assert momentum == "improving", "Should detect improvement"
+    assert mult == 1.1, "Improving should have 1.1 multiplier"
+    
+    print("✅ All tests passed!")
+
+
+if __name__ == "__main__":
+    # Run tests if executed directly
+    test_predictor()
