@@ -190,4 +190,4 @@ class OverUnderPredictor:
                    f"Home: {stats['home_last5_gpg']:.2f} GPG, {stats['home_last5_gapg']:.2f} GApg. " \
                    f"Away: {stats['away_last5_gpg']:.2f} GPG, {stats['away_last5_gapg']:.2f} GApg."
         
-        return explanations.get(rule_number, f"{confidence} confidence {prediction} based on statistical analysis.") 
+        return explanations.get(rule_number, f"{confidence} confidence {prediction} based on statistical analysis.")
