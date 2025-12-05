@@ -3,13 +3,13 @@ from scipy.stats import poisson
 
 class OverUnderPredictor:
     def __init__(self):
-        self.over_threshold = 1.5  # Goals per game for Over prediction
-        self.under_threshold_defense = 1.0  # Goals against per game for strong defense
-        self.under_threshold_attack = 1.5  # Goals per game for weak attack
+        self.over_threshold = 1.5
+        self.under_threshold_defense = 1.0
+        self.under_threshold_attack = 1.5
         
     def predict_over_under(self, home_stats, away_stats, is_home=True):
         """
-        Predict Over/Under 2.5 goals with confidence level
+        Predict Over/Under 2.5 goals with enhanced last 5/last 10 logic
         
         Args:
             home_stats: Dictionary of home team statistics
@@ -19,103 +19,179 @@ class OverUnderPredictor:
         Returns:
             Dictionary with prediction, confidence, probability, and explanation
         """
-        # Get relevant stats based on home/away
-        if is_home:
-            home_gpg = home_stats['home_gpg']
-            home_gapg = home_stats['home_gapg']
-            away_gpg = away_stats['away_gpg']
-            away_gapg = away_stats['away_gapg']
-        else:
-            home_gpg = home_stats['away_gpg']
-            home_gapg = home_stats['away_gapg']
-            away_gpg = away_stats['home_gpg']
-            away_gapg = away_stats['home_gapg']
+        # Extract all relevant stats
+        stats = self._extract_stats_for_prediction(home_stats, away_stats, is_home)
         
-        # Use hybrid stats for prediction
-        home_attack = home_stats['gpg_hybrid']
-        home_defense = home_stats['gapg_hybrid']
-        away_attack = away_stats['gpg_hybrid']
-        away_defense = away_stats['gapg_hybrid']
+        # Apply the 5-rule system
+        prediction, confidence, rule_number = self._apply_five_rules(stats)
         
-        # Calculate expected goals using Poisson distribution
-        lambda_home = (home_attack * away_defense) / 2.5  # Normalized to league average
-        lambda_away = (away_attack * home_defense) / 2.5
+        # Calculate Poisson probabilities for expected goals
+        expected_goals, prob_over, prob_under = self._calculate_poisson_probabilities(stats)
         
-        # Adjust for home advantage
-        if is_home:
-            lambda_home *= 1.2
-            lambda_away *= 0.9
+        # If no clear rule matches but Poisson suggests edge
+        if confidence == "None" and max(prob_over, prob_under) > 0.55:
+            if prob_over > prob_under:
+                prediction = "Over 2.5"
+                confidence = "Low"
+                rule_number = 5
+            else:
+                prediction = "Under 2.5"
+                confidence = "Low"
+                rule_number = 5
         
-        # Calculate probabilities
-        prob_0_goals = poisson.pmf(0, lambda_home + lambda_away)
-        prob_1_goal = poisson.pmf(1, lambda_home + lambda_away)
-        prob_2_goals = poisson.pmf(2, lambda_home + lambda_away)
-        
-        prob_under_25 = prob_0_goals + prob_1_goal + prob_2_goals
-        prob_over_25 = 1 - prob_under_25
-        
-        # Apply prediction rules
-        prediction, confidence, explanation = self._apply_rules(
-            home_stats, away_stats, prob_over_25, prob_under_25
-        )
-        
-        # Expected total goals
-        expected_goals = lambda_home + lambda_away
+        explanation = self._generate_explanation(prediction, confidence, rule_number, stats)
         
         return {
             'prediction': prediction,
             'confidence': confidence,
-            'probability': prob_over_25 if prediction == 'Over 2.5' else prob_under_25,
+            'probability': prob_over if prediction == "Over 2.5" else prob_under,
             'expected_goals': expected_goals,
-            'lambda_home': lambda_home,
-            'lambda_away': lambda_away,
-            'explanation': explanation
+            'rule_number': rule_number,
+            'explanation': explanation,
+            'stats_used': stats
         }
     
-    def _apply_rules(self, home_stats, away_stats, prob_over, prob_under):
+    def _extract_stats_for_prediction(self, home_stats, away_stats, is_home):
+        """Extract and organize all relevant statistics for prediction"""
+        stats = {}
+        
+        # Last 5 home/away stats
+        if is_home:
+            stats['home_last5_gpg'] = home_stats.get('last5_home_gpg', home_stats.get('home_gpg', 0))
+            stats['home_last5_gapg'] = home_stats.get('last5_home_gapg', home_stats.get('home_gapg', 0))
+            stats['away_last5_gpg'] = away_stats.get('last5_away_gpg', away_stats.get('away_gpg', 0))
+            stats['away_last5_gapg'] = away_stats.get('last5_away_gapg', away_stats.get('away_gapg', 0))
+            
+            # Last 10 home/away stats
+            stats['home_last10_gpg'] = home_stats.get('last10_home_gpg', stats['home_last5_gpg'])
+            stats['home_last10_gapg'] = home_stats.get('last10_home_gapg', stats['home_last5_gapg'])
+            stats['away_last10_gpg'] = away_stats.get('last10_away_gpg', stats['away_last5_gpg'])
+            stats['away_last10_gapg'] = away_stats.get('last10_away_gapg', stats['away_last5_gapg'])
+        else:
+            # For neutral venue or away team as "home"
+            stats['home_last5_gpg'] = home_stats.get('last5_away_gpg', home_stats.get('away_gpg', 0))
+            stats['home_last5_gapg'] = home_stats.get('last5_away_gapg', home_stats.get('away_gapg', 0))
+            stats['away_last5_gpg'] = away_stats.get('last5_home_gpg', away_stats.get('home_gpg', 0))
+            stats['away_last5_gapg'] = away_stats.get('last5_home_gapg', away_stats.get('home_gapg', 0))
+            
+            stats['home_last10_gpg'] = home_stats.get('last10_away_gpg', stats['home_last5_gpg'])
+            stats['home_last10_gapg'] = home_stats.get('last10_away_gapg', stats['home_last5_gapg'])
+            stats['away_last10_gpg'] = away_stats.get('last10_home_gpg', stats['away_last5_gpg'])
+            stats['away_last10_gapg'] = away_stats.get('last10_home_gapg', stats['away_last5_gapg'])
+        
+        # Hybrid metrics (60% actual, 40% xG)
+        stats['home_hybrid_gpg'] = 0.6 * home_stats.get('gpg_last10', 0) + 0.4 * home_stats.get('avg_xg_for', 0)
+        stats['home_hybrid_gapg'] = 0.6 * home_stats.get('gapg_last10', 0) + 0.4 * home_stats.get('avg_xg_against', 0)
+        stats['away_hybrid_gpg'] = 0.6 * away_stats.get('gpg_last10', 0) + 0.4 * away_stats.get('avg_xg_for', 0)
+        stats['away_hybrid_gapg'] = 0.6 * away_stats.get('gapg_last10', 0) + 0.4 * away_stats.get('avg_xg_against', 0)
+        
+        # Form indicators
+        stats['home_form'] = home_stats.get('form_last_5', '')
+        stats['away_form'] = away_stats.get('form_last_5', '')
+        
+        return stats
+    
+    def _apply_five_rules(self, stats):
         """
-        Apply the 5-rule system for predictions
+        Apply the 5-rule prediction system:
+        1. High Confidence Over: Both teams >1.5 GPG (Last 10 & 5)
+        2. High Confidence Under: Defense <1.0 GA PG vs Attack <1.5 GPG (Last 10 & 5)
+        3. Moderate Confidence Over: Both teams >1.5 GPG (Last 5 only)
+        4. Moderate Confidence Under: Defense <1.0 GA PG vs Attack <1.5 GPG (Last 5 only)
+        5. No clear statistical edge
         """
+        
         # Rule 1: High Confidence Over
-        if (home_stats['gpg_last10'] > self.over_threshold and 
-            away_stats['gpg_last10'] > self.over_threshold and
-            home_stats['gpg_hybrid'] > self.over_threshold and
-            away_stats['gpg_hybrid'] > self.over_threshold):
-            return 'Over 2.5', 'High', (
-                "High Confidence Over: Both teams average >1.5 goals per game "
-                "in last 10 matches and hybrid metrics"
-            )
+        if (stats['home_last10_gpg'] > self.over_threshold and 
+            stats['away_last10_gpg'] > self.over_threshold and
+            stats['home_last5_gpg'] > self.over_threshold and 
+            stats['away_last5_gpg'] > self.over_threshold):
+            return "Over 2.5", "High", 1
         
         # Rule 2: High Confidence Under
-        if (home_stats['gapg_last10'] < self.under_threshold_defense and 
-            away_stats['gpg_last10'] < self.under_threshold_attack and
-            home_stats['gapg_hybrid'] < self.under_threshold_defense and
-            away_stats['gpg_hybrid'] < self.under_threshold_attack):
-            return 'Under 2.5', 'High', (
-                "High Confidence Under: Strong defense (<1.0 GA/game) vs "
-                "weak attack (<1.5 G/game) in both recent and hybrid metrics"
-            )
+        if (stats['home_last10_gapg'] < self.under_threshold_defense and 
+            stats['away_last10_gpg'] < self.under_threshold_attack and
+            stats['home_last5_gapg'] < self.under_threshold_defense and 
+            stats['away_last5_gpg'] < self.under_threshold_attack):
+            return "Under 2.5", "High", 2
         
-        # Rule 3: Moderate Confidence Over (last 5 only)
-        if (home_stats['gpg_hybrid'] > self.over_threshold and 
-            away_stats['gpg_hybrid'] > self.over_threshold):
-            return 'Over 2.5', 'Moderate', (
-                "Moderate Confidence Over: Both teams show strong attacking "
-                "form in recent/hybrid metrics (>1.5 goals per game)"
-            )
+        # Rule 3: Moderate Confidence Over (Last 5 only)
+        if (stats['home_last5_gpg'] > self.over_threshold and 
+            stats['away_last5_gpg'] > self.over_threshold):
+            return "Over 2.5", "Moderate", 3
         
-        # Rule 4: Moderate Confidence Under (last 5 only)
-        if (home_stats['gapg_hybrid'] < self.under_threshold_defense and 
-            away_stats['gpg_hybrid'] < self.under_threshold_attack):
-            return 'Under 2.5', 'Moderate', (
-                "Moderate Confidence Under: Recent defensive strength vs "
-                "recent attacking weakness suggests low scoring"
-            )
+        # Rule 4: Moderate Confidence Under (Last 5 only)
+        if (stats['home_last5_gapg'] < self.under_threshold_defense and 
+            stats['away_last5_gpg'] < self.under_threshold_attack):
+            return "Under 2.5", "Moderate", 4
         
         # Rule 5: No clear edge
-        if prob_over > 0.55:
-            return 'Over 2.5', 'Low', "Slight statistical edge for Over based on Poisson model"
-        elif prob_under > 0.55:
-            return 'Under 2.5', 'Low', "Slight statistical edge for Under based on Poisson model"
-        else:
-            return 'No Bet', 'None', "No clear statistical edge - recommend avoiding this market"
+        return "No Bet", "None", 5
+    
+    def _calculate_poisson_probabilities(self, stats):
+        """Calculate expected goals and probabilities using Poisson distribution"""
+        
+        # Calculate lambda (expected goals) using weighted average
+        # Weight: 40% last10, 40% last5, 20% hybrid
+        home_attack = (0.4 * stats['home_last10_gpg'] + 
+                      0.4 * stats['home_last5_gpg'] + 
+                      0.2 * stats['home_hybrid_gpg'])
+        
+        away_defense = (0.4 * stats['away_last10_gapg'] + 
+                      0.4 * stats['away_last5_gapg'] + 
+                      0.2 * stats['away_hybrid_gapg'])
+        
+        away_attack = (0.4 * stats['away_last10_gpg'] + 
+                     0.4 * stats['away_last5_gpg'] + 
+                     0.2 * stats['away_hybrid_gpg'])
+        
+        home_defense = (0.4 * stats['home_last10_gapg'] + 
+                      0.4 * stats['home_last5_gapg'] + 
+                      0.2 * stats['home_hybrid_gapg'])
+        
+        # Adjust for home advantage (if applicable)
+        lambda_home = home_attack * away_defense * 1.2  # Home advantage factor
+        lambda_away = away_attack * home_defense * 0.9   # Away disadvantage factor
+        
+        expected_goals = lambda_home + lambda_away
+        
+        # Calculate Poisson probabilities
+        total_lambda = lambda_home + lambda_away
+        
+        # Probability of 0, 1, or 2 goals (Under 2.5)
+        prob_0 = poisson.pmf(0, total_lambda)
+        prob_1 = poisson.pmf(1, total_lambda)
+        prob_2 = poisson.pmf(2, total_lambda)
+        prob_under = prob_0 + prob_1 + prob_2
+        
+        # Probability of Over 2.5 goals
+        prob_over = 1 - prob_under
+        
+        return expected_goals, prob_over, prob_under
+    
+    def _generate_explanation(self, prediction, confidence, rule_number, stats):
+        """Generate detailed explanation for the prediction"""
+        
+        explanations = {
+            1: f"High Confidence {prediction}: Both teams average >1.5 goals per game in their last 10 AND last 5 matches. "
+                f"Home: {stats['home_last10_gpg']:.2f} GPG (last10), {stats['home_last5_gpg']:.2f} GPG (last5). "
+                f"Away: {stats['away_last10_gpg']:.2f} GPG (last10), {stats['away_last5_gpg']:.2f} GPG (last5).",
+            
+            2: f"High Confidence {prediction}: Strong defense (<1.0 GA/game) vs weak attack (<1.5 G/game) in both recent periods. "
+                f"Home defense: {stats['home_last10_gapg']:.2f} GApg (last10), {stats['home_last5_gapg']:.2f} GApg (last5). "
+                f"Away attack: {stats['away_last10_gpg']:.2f} GPG (last10), {stats['away_last5_gpg']:.2f} GPG (last5).",
+            
+            3: f"Moderate Confidence {prediction}: Both teams show strong attacking form in last 5 matches (>1.5 goals per game). "
+                f"Home: {stats['home_last5_gpg']:.2f} GPG (last5). Away: {stats['away_last5_gpg']:.2f} GPG (last5).",
+            
+            4: f"Moderate Confidence {prediction}: Recent defensive strength vs recent attacking weakness suggests low scoring. "
+                f"Home defense (last5): {stats['home_last5_gapg']:.2f} GApg. Away attack (last5): {stats['away_last5_gpg']:.2f} GPG.",
+            
+            5: f"Low Confidence {prediction}: Slight statistical edge based on Poisson model. Expected goals: {sum([stats['home_last5_gpg'], stats['away_last5_gpg']])/2:.2f}. "
+                f"No strong rule match but model suggests {prediction.lower()}."
+        }
+        
+        if rule_number == 5 and prediction == "No Bet":
+            return "No clear statistical edge. Teams don't meet any of the established criteria for Over/Under predictions."
+        
+        return explanations.get(rule_number, f"{confidence} confidence {prediction} based on statistical analysis.")
