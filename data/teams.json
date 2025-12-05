@@ -1,0 +1,23 @@
+{
+  "Arsenal": {
+    "home": {
+      "last10": {"gpg": 2.57, "ga_pg": 0.29},
+      "last5": {"gpg": 2.00, "ga_pg": 0.40}
+    },
+    "away": {
+      "last10": {"gpg": 1.29, "ga_pg": 0.71},
+      "last5": {"gpg": 1.60, "ga_pg": 0.80}
+    }
+  },
+  "Manchester City": {
+    "home": {
+      "last10": {"gpg": 2.71, "ga_pg": 0.86},
+      "last5": {"gpg": 3.20, "ga_pg": 0.80}
+    },
+    "away": {
+      "last10": {"gpg": 1.86, "ga_pg": 1.43},
+      "last5": {"gpg": 1.60, "ga_pg": 1.60}
+    }
+  }
+  // Add all 40 teams (20 EPL home + 20 EPL away from your data)
+}
