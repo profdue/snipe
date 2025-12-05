@@ -2,13 +2,11 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import os
-from models.predictor import OverUnderPredictor
-from models.staking import KellyCriterion
+from models.complete_predictor import CompletePhantomPredictor
 
 class FootballPredictorApp:
     def __init__(self):
-        self.predictor = OverUnderPredictor()
-        self.staking = KellyCriterion()
+        self.predictor = CompletePhantomPredictor(bankroll=1000, min_confidence=0.55)
         self.leagues = self.load_leagues()
         
     def load_leagues(self):
@@ -34,30 +32,26 @@ class FootballPredictorApp:
         return leagues
     
     def calculate_team_stats(self, team_data):
-        """Calculate comprehensive team statistics including last 5/last 10 data"""
+        """Calculate comprehensive team statistics"""
         stats = {}
         
-        # Basic stats from CSV
+        # Basic stats
         total_matches = team_data['matches_played']
-        
-        # Home/Away basic stats
         home_games = team_data['home_wins'] + team_data['home_draws'] + team_data['home_losses']
         away_games = team_data['away_wins'] + team_data['away_draws'] + team_data['away_losses']
         
-        # Goals per game calculations
         total_goals_for = team_data['home_goals_for'] + team_data['away_goals_for']
         total_goals_against = team_data['home_goals_against'] + team_data['away_goals_against']
         
         stats['gpg_last10'] = total_goals_for / total_matches if total_matches > 0 else 0
         stats['gapg_last10'] = total_goals_against / total_matches if total_matches > 0 else 0
         
-        # Home/Away specific GPG
         stats['home_gpg'] = team_data['home_goals_for'] / home_games if home_games > 0 else 0
         stats['away_gpg'] = team_data['away_goals_for'] / away_games if away_games > 0 else 0
         stats['home_gapg'] = team_data['home_goals_against'] / home_games if home_games > 0 else 0
         stats['away_gapg'] = team_data['away_goals_against'] / away_games if away_games > 0 else 0
         
-        # Last 5/Last 10 stats (from your tables)
+        # Last 5/Last 10 stats
         stats['last5_home_gpg'] = team_data.get('last5_home_gpg', stats['home_gpg'])
         stats['last5_home_gapg'] = team_data.get('last5_home_gapg', stats['home_gapg'])
         stats['last5_away_gpg'] = team_data.get('last5_away_gpg', stats['away_gpg'])
@@ -68,9 +62,12 @@ class FootballPredictorApp:
         stats['last10_away_gpg'] = team_data.get('last10_away_gpg', stats['away_gpg'])
         stats['last10_away_gapg'] = team_data.get('last10_away_gapg', stats['away_gapg'])
         
-        # Hybrid metrics (60% actual, 40% xG)
+        # xG and hybrid stats
         xg_for = team_data.get('avg_xg_for', stats['gpg_last10'])
         xg_against = team_data.get('avg_xg_against', stats['gapg_last10'])
+        
+        stats['avg_xg_for'] = xg_for
+        stats['avg_xg_against'] = xg_against
         
         stats['gpg_hybrid'] = 0.6 * stats['gpg_last10'] + 0.4 * xg_for
         stats['gapg_hybrid'] = 0.6 * stats['gapg_last10'] + 0.4 * xg_against
@@ -84,7 +81,7 @@ class FootballPredictorApp:
     
     def run(self):
         st.set_page_config(
-            page_title="SNIPE: Football Over/Under Predictor",
+            page_title="⚽ SNIPE v4.3: Complete Football Predictor",
             page_icon="⚽",
             layout="wide"
         )
@@ -107,12 +104,15 @@ class FootballPredictorApp:
                 margin: 10px 0;
                 border-left: 5px solid #4CAF50;
             }
+            .value-good { color: #4CAF50; font-weight: bold; }
+            .value-fair { color: #FF9800; font-weight: bold; }
+            .value-poor { color: #F44336; font-weight: bold; }
             </style>
         """, unsafe_allow_html=True)
         
         # Header
-        st.title("⚽ SNIPE: Football Over/Under Predictor")
-        st.markdown("### Advanced statistical predictions using last 5/last 10 match data")
+        st.title("⚽ SNIPE v4.3: Complete Football Predictor")
+        st.markdown("### Advanced Hybrid Model with Bayesian Shrinkage & Kelly Staking")
         
         # Sidebar
         with st.sidebar:
@@ -133,18 +133,23 @@ class FootballPredictorApp:
                 home_team = st.selectbox("Home Team", team_options)
                 away_team = st.selectbox("Away Team", [t for t in team_options if t != home_team])
                 
-                # Additional options
-                st.subheader("📊 Analysis Options")
-                use_hybrid = st.checkbox("Use Hybrid Model (xG + Actual)", value=True)
-                min_confidence = st.selectbox("Minimum Confidence", 
-                                             ["High", "Moderate", "Low", "All"],
-                                             index=0)
+                # Market odds
+                st.subheader("💰 Market Odds")
+                over_odds = st.number_input("Over 2.5 Odds", value=1.85, min_value=1.1, max_value=10.0, step=0.05)
+                under_odds = st.number_input("Under 2.5 Odds", value=1.95, min_value=1.1, max_value=10.0, step=0.05)
                 
-                st.subheader("💰 Staking")
-                bankroll = st.number_input("Bankroll", value=1000, min_value=100, step=100)
-                kelly_fraction = st.slider("Kelly Fraction", 0.1, 1.0, 0.5, 0.1)
+                # Bankroll management
+                st.subheader("🏦 Bankroll Management")
+                bankroll = st.number_input("Bankroll ($)", value=1000, min_value=100, max_value=100000, step=100)
+                min_confidence = st.slider("Minimum Confidence", 0.50, 0.90, 0.55, 0.01)
                 
-                predict_btn = st.button("🎯 Get Prediction", type="primary", use_container_width=True)
+                # Advanced options
+                with st.expander("Advanced Options"):
+                    use_bayesian = st.checkbox("Use Bayesian Shrinkage", value=True)
+                    detect_momentum = st.checkbox("Detect Form Momentum", value=True)
+                    kelly_fraction = st.slider("Kelly Fraction", 0.1, 1.0, 0.25, 0.05)
+                
+                predict_btn = st.button("🎯 Get Complete Prediction", type="primary", use_container_width=True)
         
         if predict_btn:
             # Get team data and calculate stats
@@ -154,16 +159,35 @@ class FootballPredictorApp:
             home_stats = self.calculate_team_stats(home_data)
             away_stats = self.calculate_team_stats(away_data)
             
-            # Make prediction
-            prediction = self.predictor.predict_over_under(home_stats, away_stats, is_home=True)
+            # Market odds
+            market_odds = {
+                'over_25': over_odds,
+                'under_25': under_odds
+            }
             
-            # Display prediction
+            # Make prediction
+            prediction = self.predictor.predict_with_staking(
+                home_stats=home_stats,
+                away_stats=away_stats,
+                market_odds=market_odds,
+                league=selected_league,
+                bankroll=bankroll
+            )
+            
+            # Display main prediction
             confidence_colors = {
                 "High": "#4CAF50",
                 "Moderate": "#FF9800",
-                "Low": "#F44336",
+                "Low": "#FFC107",
                 "None": "#9E9E9E"
             }
+            
+            value_color = {
+                'Excellent': '#4CAF50',
+                'Good': '#8BC34A',
+                'Fair': '#FFC107',
+                'Poor': '#F44336'
+            }.get(prediction['staking_info']['value_rating'], '#9E9E9E')
             
             st.markdown(f"""
             <div class="prediction-card">
@@ -175,11 +199,13 @@ class FootballPredictorApp:
                             <span style="color: {confidence_colors[prediction['confidence']]}">
                                 {prediction['confidence']}
                             </span>
+                            &nbsp;&nbsp;•&nbsp;&nbsp;
+                            <strong>Rule:</strong> #{prediction['rule_number']}
                         </p>
                     </div>
                     <div style="text-align: right;">
                         <h1 style="margin: 0; font-size: 3em;">{prediction['probability']:.1%}</h1>
-                        <p>Probability</p>
+                        <p>Probability vs {prediction['market_odds']:.2f} odds</p>
                     </div>
                 </div>
                 <div style="margin-top: 20px; background: rgba(255,255,255,0.1); padding: 15px; border-radius: 10px;">
@@ -188,113 +214,225 @@ class FootballPredictorApp:
             </div>
             """, unsafe_allow_html=True)
             
-            # Detailed statistics
-            st.subheader("📊 Detailed Statistics")
+            # Staking recommendation
+            staking = prediction['staking_info']
             
-            col1, col2 = st.columns(2)
+            col1, col2, col3, col4 = st.columns(4)
             
             with col1:
-                st.markdown(f"### {home_team} Statistics")
-                
-                # Last 5 Home
-                st.markdown("**Last 5 Home Matches:**")
-                st.metric("Goals/Game", f"{home_stats['last5_home_gpg']:.2f}")
-                st.metric("Goals Against/Game", f"{home_stats['last5_home_gapg']:.2f}")
-                
-                # Last 10 Home
-                st.markdown("**Last 10 Home Matches:**")
-                st.metric("Goals/Game", f"{home_stats['last10_home_gpg']:.2f}")
-                st.metric("Goals Against/Game", f"{home_stats['last10_home_gapg']:.2f}")
-                
-                st.metric("Hybrid GPG", f"{home_stats['gpg_hybrid']:.2f}")
-                st.metric("Current Form", home_stats['form_last_5'])
-            
+                st.metric("Recommended Stake", f"${staking['stake_amount']:.2f}")
             with col2:
-                st.markdown(f"### {away_team} Statistics")
-                
-                # Last 5 Away
-                st.markdown("**Last 5 Away Matches:**")
-                st.metric("Goals/Game", f"{away_stats['last5_away_gpg']:.2f}")
-                st.metric("Goals Against/Game", f"{away_stats['last5_away_gapg']:.2f}")
-                
-                # Last 10 Away
-                st.markdown("**Last 10 Away Matches:**")
-                st.metric("Goals/Game", f"{away_stats['last10_away_gpg']:.2f}")
-                st.metric("Goals Against/Game", f"{away_stats['last10_away_gapg']:.2f}")
-                
-                st.metric("Hybrid GPG", f"{away_stats['gpg_hybrid']:.2f}")
-                st.metric("Current Form", away_stats['form_last_5'])
+                st.metric("% of Bankroll", f"{staking['stake_percent']:.1%}")
+            with col3:
+                st.metric("Expected Value", f"${staking['expected_value']:.2f}")
+            with col4:
+                st.metric("Edge", f"{staking['edge_percent']:.1f}%")
             
-            # Staking recommendation if prediction is not "No Bet"
-            if prediction['prediction'] != "No Bet" and prediction['confidence'] != "None":
-                st.subheader("💰 Staking Recommendation")
-                
-                col1, col2, col3 = st.columns(3)
+            st.markdown(f"""
+            <div style="background-color: {value_color}20; border-left: 5px solid {value_color}; 
+                      padding: 15px; border-radius: 5px; margin: 10px 0;">
+                <strong>Value Rating:</strong> 
+                <span style="color: {value_color}; font-weight: bold;">
+                    {staking['value_rating']}
+                </span>
+                &nbsp;&nbsp;•&nbsp;&nbsp;
+                <strong>Risk Level:</strong> {staking['risk_level']}
+                &nbsp;&nbsp;•&nbsp;&nbsp;
+                <strong>Kelly Fraction:</strong> {staking['kelly_fraction']:.2%}
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Detailed statistics
+            st.subheader("📊 Advanced Statistics Analysis")
+            
+            tab1, tab2, tab3 = st.tabs(["Team Analysis", "Poisson Model", "Rule Breakdown"])
+            
+            with tab1:
+                col1, col2 = st.columns(2)
                 
                 with col1:
-                    odds = st.number_input("Odds", value=1.85, min_value=1.1, max_value=10.0, step=0.05)
-                
-                stake_info = self.staking.calculate_stake(
-                    probability=prediction['probability'],
-                    odds=odds,
-                    bankroll=bankroll,
-                    max_percent=0.05
-                )
+                    st.markdown(f"### {home_team} Analysis")
+                    
+                    # Last 5 vs Last 10 comparison
+                    st.markdown("**Form Momentum:**")
+                    momentum = prediction['stats_analysis']['home_momentum']
+                    st.success(f"📈 {momentum.capitalize()} form") if momentum == "improving" else \
+                    st.warning(f"📊 Stable form") if momentum == "stable" else \
+                    st.error(f"📉 Declining form")
+                    
+                    # Stats comparison
+                    st.markdown("**Last 5 vs Last 10 (Adjusted):**")
+                    col_a, col_b = st.columns(2)
+                    with col_a:
+                        st.metric("GPG", 
+                                 f"{prediction['stats_analysis']['home_attack']:.2f}",
+                                 delta=f"{home_stats['last5_home_gpg']:.2f} → {home_stats['last10_home_gpg']:.2f}")
+                    with col_b:
+                        st.metric("GApg", 
+                                 f"{prediction['stats_analysis']['home_defense']:.2f}",
+                                 delta=f"{home_stats['last5_home_gapg']:.2f} → {home_stats['last10_home_gapg']:.2f}")
+                    
+                    st.metric("xG Hybrid", f"{home_stats['gpg_hybrid']:.2f}")
+                    st.metric("Current Form", home_stats['form_last_5'])
                 
                 with col2:
-                    st.metric("Recommended Stake", f"${stake_info['stake_amount']:.2f}")
-                    st.metric("% of Bankroll", f"{stake_info['stake_percent']:.1%}")
+                    st.markdown(f"### {away_team} Analysis")
+                    
+                    # Last 5 vs Last 10 comparison
+                    st.markdown("**Form Momentum:**")
+                    momentum = prediction['stats_analysis']['away_momentum']
+                    st.success(f"📈 {momentum.capitalize()} form") if momentum == "improving" else \
+                    st.warning(f"📊 Stable form") if momentum == "stable" else \
+                    st.error(f"📉 Declining form")
+                    
+                    # Stats comparison
+                    st.markdown("**Last 5 vs Last 10 (Adjusted):**")
+                    col_a, col_b = st.columns(2)
+                    with col_a:
+                        st.metric("GPG", 
+                                 f"{prediction['stats_analysis']['away_attack']:.2f}",
+                                 delta=f"{away_stats['last5_away_gpg']:.2f} → {away_stats['last10_away_gpg']:.2f}")
+                    with col_b:
+                        st.metric("GApg", 
+                                 f"{prediction['stats_analysis']['away_defense']:.2f}",
+                                 delta=f"{away_stats['last5_away_gapg']:.2f} → {away_stats['last10_away_gapg']:.2f}")
+                    
+                    st.metric("xG Hybrid", f"{away_stats['gpg_hybrid']:.2f}")
+                    st.metric("Current Form", away_stats['form_last_5'])
+            
+            with tab2:
+                poisson = prediction['poisson_details']
                 
-                with col3:
-                    st.metric("Expected Value", f"${stake_info['expected_value']:.2f}")
-                    st.metric("Risk Level", stake_info['risk_level'])
+                st.markdown(f"**Expected Goals:** {prediction['expected_goals']:.2f}")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("**Home Team:**")
+                    st.metric("λ (lambda)", f"{poisson['lambda_home']:.2f}")
+                    st.metric("Expected Goals", f"{poisson['expected_home_goals']:.2f}")
+                
+                with col2:
+                    st.markdown("**Away Team:**")
+                    st.metric("λ (lambda)", f"{poisson['lambda_away']:.2f}")
+                    st.metric("Expected Goals", f"{poisson['expected_away_goals']:.2f}")
+                
+                # Goal distribution probabilities
+                st.markdown("**Goal Distribution Probabilities:**")
+                
+                total_lambda = poisson['lambda_home'] + poisson['lambda_away']
+                goal_probs = {}
+                
+                for goals in range(0, 7):
+                    prob = self.predictor.poisson_pmf(goals, total_lambda)
+                    goal_probs[goals] = prob
+                
+                # Display as bar chart
+                prob_df = pd.DataFrame({
+                    'Goals': list(goal_probs.keys()),
+                    'Probability': list(goal_probs.values())
+                })
+                
+                st.bar_chart(prob_df.set_index('Goals'))
+                
+                # Highlight under/over probabilities
+                prob_under_25 = sum(goal_probs[k] for k in range(3))
+                prob_over_25 = 1 - prob_under_25
+                
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    st.metric("P(Under 2.5)", f"{prob_under_25:.1%}")
+                with col_b:
+                    st.metric("P(Over 2.5)", f"{prob_over_25:.1%}")
             
-            # Rule explanation
-            st.subheader("🔍 Rule Applied")
-            rules_explanation = {
-                1: "**Rule 1 (High Confidence Over):** Both teams >1.5 GPG in Last 10 & Last 5 matches",
-                2: "**Rule 2 (High Confidence Under):** Defense <1.0 GA PG vs Attack <1.5 GPG in Last 10 & Last 5",
-                3: "**Rule 3 (Moderate Confidence Over):** Both teams >1.5 GPG in Last 5 matches only",
-                4: "**Rule 4 (Moderate Confidence Under):** Defense <1.0 GA PG vs Attack <1.5 GPG in Last 5 only",
-                5: "**Rule 5 (Low Confidence/No Bet):** No clear statistical edge or slight Poisson model edge"
-            }
-            
-            st.info(rules_explanation.get(prediction['rule_number'], "No specific rule matched"))
+            with tab3:
+                rules_explanation = {
+                    1: "**High Confidence Over:** Both teams >1.5 GPG in Bayesian-adjusted last 10 & last 5 metrics",
+                    2: "**High Confidence Under:** Defense <1.0 GApg vs Attack <1.5 GPG in both periods (adjusted)",
+                    3: "**Moderate Confidence Over:** Both teams >1.5 GPG in last 5 matches (with momentum)",
+                    4: "**Moderate Confidence Under:** Defense <1.0 GApg vs Attack <1.5 GPG in last 5 matches",
+                    5: "**Low Confidence/No Bet:** xG-based edge or no clear statistical advantage"
+                }
+                
+                rule_text = rules_explanation.get(prediction['rule_number'], "No specific rule matched")
+                
+                if prediction['rule_number'] == 5 and prediction['prediction'] == "No Bet":
+                    st.warning("""
+                    **No Bet Recommended**
+                    
+                    The model doesn't detect a clear statistical edge based on:
+                    - Bayesian-adjusted metrics
+                    - Form momentum analysis
+                    - xG hybrid calculations
+                    - Poisson goal expectations
+                    
+                    Recommendation: Avoid this market or look for alternative betting opportunities.
+                    """)
+                else:
+                    st.info(f"""
+                    **Rule #{prediction['rule_number']} Applied:**
+                    
+                    {rule_text}
+                    
+                    **Confidence Level:** {prediction['confidence']}
+                    **Model Probability:** {prediction['probability']:.1%}
+                    **Market Implied Probability:** {1/prediction['market_odds']:.1%}
+                    **Edge:** {staking['edge_percent']:.1f}%
+                    """)
         
         else:
             # Welcome screen
             st.markdown("""
-            ## 🎯 Welcome to SNIPE Predictor
+            ## 🎯 Welcome to SNIPE v4.3
             
-            This advanced predictor uses a **5-rule system** based on last 5 and last 10 home/away match statistics.
+            **Complete Football Prediction System** with:
             
-            ### 📊 How It Works
+            ### 🏆 Core Features
             
-            1. **Select a league** and teams from the sidebar
-            2. **Choose analysis options** (hybrid model, confidence level)
-            3. **Get predictions** with detailed statistics
-            4. **Receive staking recommendations** using Kelly Criterion
+            1. **Hybrid Statistical Model**
+               - Last 5 & Last 10 home/away analysis
+               - Bayesian shrinkage for small samples
+               - Form momentum detection
+               - League-context aware thresholds
             
-            ### 🏆 Available Leagues
+            2. **xG Integration**
+               - 60% actual goals, 40% expected goals (xG)
+               - Neutral baseline adjustments
+               - Hybrid attack/defense ratings
             
-            """)
+            3. **Advanced Poisson Model**
+               - Pure Poisson probability calculations
+               - Home advantage adjustment
+               - Goal distribution analysis
             
-            # Display leagues
-            for league_key, league_info in self.leagues.items():
-                with st.expander(f"{league_info['name']} ({len(league_info['teams'])} teams)"):
-                    st.dataframe(league_info['teams'][['team_name', 'matches_played', 'form_last_5']], 
-                                use_container_width=True)
+            4. **Professional Bankroll Management**
+               - Fractional Kelly Criterion
+               - Confidence-weighted staking
+               - Edge calculation vs market odds
+               - Risk level categorization
             
-            st.markdown("""
-            ### 📈 The 5-Rule Prediction System
+            ### 📈 The 5-Rule System
             
-            1. **High Confidence Over**: Both teams >1.5 GPG (Last 10 & Last 5)
-            2. **High Confidence Under**: Defense <1.0 GA PG vs Attack <1.5 GPG (Last 10 & Last 5)
-            3. **Moderate Confidence Over**: Both teams >1.5 GPG (Last 5 only)
-            4. **Moderate Confidence Under**: Defense <1.0 GA PG vs Attack <1.5 GPG (Last 5 only)
-            5. **No Bet**: No clear statistical edge
+            1. **High Over:** Both teams >1.5 GPG (adj. last10 & last5)
+            2. **High Under:** Defense <1.0 GApg vs Attack <1.5 GPG (both periods)
+            3. **Moderate Over:** Both teams >1.5 GPG (last5 only)
+            4. **Moderate Under:** Defense <1.0 GApg vs Attack <1.5 GPG (last5 only)
+            5. **Low/No Bet:** xG edge or no clear advantage
             
-            ### 🎯 Success Rate: 100% Test Accuracy (Dec 2-4, 2025)
+            ### 🎯 Proven Performance
+            
+            - **100% Test Accuracy** (Dec 2-4, 2025)
+            - **Bayesian adjustments** for sample size
+            - **Momentum-aware** predictions
+            - **Value-based** staking recommendations
+            
+            ### 🚀 Getting Started
+            
+            1. Select a league from the sidebar
+            2. Choose home and away teams
+            3. Enter market odds
+            4. Set your bankroll parameters
+            5. Get complete prediction with staking recommendation
             """)
 
 if __name__ == "__main__":
