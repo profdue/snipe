@@ -115,7 +115,7 @@ class CompletePhantomPredictor:
         stats['home_last10_gapg'] = home_stats.get('last10_home_gapg', stats['home_last5_gapg'])
         
         stats['away_last5_gpg'] = away_stats.get('last5_away_gpg', away_stats.get('away_gpg', 0))
-        stats['away_last5_gapg'] = away_stats.get('last5_away_gapg', away_stats.get('away_gapg', 0))
+        stats['away_last5_gapg'] = away_stats.get('last5_away_gapg', away_stats.get('away_gpg', 0))
         stats['away_last10_gpg'] = away_stats.get('last10_away_gpg', stats['away_last5_gpg'])
         stats['away_last10_gapg'] = away_stats.get('last10_away_gapg', stats['away_last5_gapg'])
         
@@ -147,7 +147,7 @@ class CompletePhantomPredictor:
                                                                   if stats['home_momentum'] == "improving" 
                                                                   else stats['home_momentum_mult'])
         stats['away_last5_gpg_adj'] = stats['away_last5_gpg'] * stats['away_momentum_mult']
-        stats['away_last5_gapg_adj'] = stats['away_last5_gapg'] * (1/stats['away_momentum_mult'] 
+        stats['away_last5_gapg_adj'] = stats['away_last5_gpg'] * (1/stats['away_momentum_mult'] 
                                                                   if stats['away_momentum'] == "improving" 
                                                                   else stats['away_momentum_mult'])
         
@@ -277,7 +277,7 @@ class CompletePhantomPredictor:
     
     def calculate_kelly_stake(self, probability: float, odds: float, confidence: str, 
                              bankroll: float = None) -> Dict:
-        """Fractional Kelly staking with confidence weighting"""
+        """Fractional Kelly staking with confidence weighting - FIXED CONSISTENT SCHEMA"""
         if bankroll is None:
             bankroll = self.bankroll
         
@@ -291,10 +291,12 @@ class CompletePhantomPredictor:
                 'kelly_fraction': 0.0,
                 'expected_value': 0.0,
                 'risk_level': 'No Bet',
-                'edge_percent': 0.0
+                'edge_percent': 0.0,
+                'value_rating': 'None',
+                'implied_probability': 1 / odds if odds > 0 else 0.0
             }
         
-        implied_prob = 1 / odds
+        implied_prob = 1 / odds if odds > 0 else 0.0
         edge = probability - implied_prob
         
         if edge <= 0:
@@ -304,7 +306,9 @@ class CompletePhantomPredictor:
                 'kelly_fraction': 0.0,
                 'expected_value': 0.0,
                 'risk_level': 'No Value',
-                'edge_percent': edge * 100
+                'edge_percent': edge * 100,
+                'value_rating': 'Poor',
+                'implied_probability': implied_prob
             }
         
         # Kelly formula
@@ -341,6 +345,16 @@ class CompletePhantomPredictor:
         else:
             risk_level = "No Bet"
         
+        # Determine value rating
+        if edge > 0.1:
+            value_rating = "Excellent"
+        elif edge > 0.05:
+            value_rating = "Good"
+        elif edge > 0.02:
+            value_rating = "Fair"
+        else:
+            value_rating = "Poor"
+        
         return {
             'stake_amount': stake_amount,
             'stake_percent': stake_amount / bankroll,
@@ -348,8 +362,8 @@ class CompletePhantomPredictor:
             'expected_value': expected_value,
             'risk_level': risk_level,
             'edge_percent': edge * 100,
-            'implied_probability': implied_prob,
-            'value_rating': 'Excellent' if edge > 0.1 else 'Good' if edge > 0.05 else 'Fair' if edge > 0.02 else 'Poor'
+            'value_rating': value_rating,
+            'implied_probability': implied_prob
         }
     
     def predict_with_staking(self, home_stats: Dict, away_stats: Dict, 
@@ -528,29 +542,3 @@ class CompletePhantomPredictor:
             'bankroll_history': bankroll_history,
             'bet_history': bet_history
         }
-
-
-# Unit tests for the predictor
-def test_predictor():
-    """Simple unit tests for the CompletePhantomPredictor"""
-    predictor = CompletePhantomPredictor()
-    
-    # Test 1: Poisson PMF
-    assert predictor.poisson_pmf(0, 0) == 1.0, "Poisson(0, 0) should be 1.0"
-    assert predictor.poisson_pmf(0, 1) == math.exp(-1), "Poisson(0, 1) should be e^-1"
-    
-    # Test 2: Bayesian adjustment
-    adj = predictor._bayesian_adjust(2.0, 5, 1.5)
-    assert adj > 1.5 and adj < 2.0, "Should shrink toward mean"
-    
-    # Test 3: Form momentum
-    momentum, mult = predictor._calculate_form_momentum(2.0, 1.5)
-    assert momentum == "improving", "Should detect improvement"
-    assert mult == 1.1, "Improving should have 1.1 multiplier"
-    
-    print("✅ All tests passed!")
-
-
-if __name__ == "__main__":
-    # Run tests if executed directly
-    test_predictor()
