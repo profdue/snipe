@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.stats import poisson
+import math
 
 class OverUnderPredictor:
     def __init__(self):
@@ -7,6 +7,10 @@ class OverUnderPredictor:
         self.under_threshold_defense = 1.0
         self.under_threshold_attack = 1.5
         
+    def poisson_pmf(self, k, lambd):
+        """Calculate Poisson probability mass function without scipy"""
+        return (lambd ** k * math.exp(-lambd)) / math.factorial(k)
+    
     def predict_over_under(self, home_stats, away_stats, is_home=True):
         """
         Predict Over/Under 2.5 goals with enhanced last 5/last 10 logic
@@ -149,9 +153,9 @@ class OverUnderPredictor:
         total_lambda = lambda_home + lambda_away
         
         # Probability of 0, 1, or 2 goals (Under 2.5)
-        prob_0 = poisson.pmf(0, total_lambda)
-        prob_1 = poisson.pmf(1, total_lambda)
-        prob_2 = poisson.pmf(2, total_lambda)
+        prob_0 = self.poisson_pmf(0, total_lambda)
+        prob_1 = self.poisson_pmf(1, total_lambda)
+        prob_2 = self.poisson_pmf(2, total_lambda)
         prob_under = prob_0 + prob_1 + prob_2
         
         # Probability of Over 2.5 goals
@@ -182,8 +186,8 @@ class OverUnderPredictor:
         }
         
         if rule_number == 5 and prediction == "No Bet":
-            return f"No clear statistical edge. Teams don't meet any established criteria. "
-                   f"Home: {stats['home_last5_gpg']:.2f} GPG, {stats['home_last5_gapg']:.2f} GApg. "
+            return f"No clear statistical edge. Teams don't meet any established criteria. " \
+                   f"Home: {stats['home_last5_gpg']:.2f} GPG, {stats['home_last5_gapg']:.2f} GApg. " \
                    f"Away: {stats['away_last5_gpg']:.2f} GPG, {stats['away_last5_gapg']:.2f} GApg."
         
         return explanations.get(rule_number, f"{confidence} confidence {prediction} based on statistical analysis.")
