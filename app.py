@@ -58,7 +58,6 @@ class FootballPredictorApp:
         stats['away_gapg'] = team_data['away_goals_against'] / away_games if away_games > 0 else 0
         
         # Last 5/Last 10 stats (from your tables)
-        # These should be calculated from match data or included in CSV
         stats['last5_home_gpg'] = team_data.get('last5_home_gpg', stats['home_gpg'])
         stats['last5_home_gapg'] = team_data.get('last5_home_gapg', stats['home_gapg'])
         stats['last5_away_gpg'] = team_data.get('last5_away_gpg', stats['away_gpg'])
