@@ -107,6 +107,9 @@ class FootballPredictorApp:
             .value-good { color: #4CAF50; font-weight: bold; }
             .value-fair { color: #FF9800; font-weight: bold; }
             .value-poor { color: #F44336; font-weight: bold; }
+            .momentum-improving { color: #4CAF50; }
+            .momentum-stable { color: #FF9800; }
+            .momentum-declining { color: #F44336; }
             </style>
         """, unsafe_allow_html=True)
         
@@ -256,9 +259,13 @@ class FootballPredictorApp:
                     # Last 5 vs Last 10 comparison
                     st.markdown("**Form Momentum:**")
                     momentum = prediction['stats_analysis']['home_momentum']
-                    st.success(f"📈 {momentum.capitalize()} form") if momentum == "improving" else \
-                    st.warning(f"📊 Stable form") if momentum == "stable" else \
-                    st.error(f"📉 Declining form")
+                    
+                    if momentum == "improving":
+                        st.markdown('<p class="momentum-improving">📈 Improving form</p>', unsafe_allow_html=True)
+                    elif momentum == "stable":
+                        st.markdown('<p class="momentum-stable">📊 Stable form</p>', unsafe_allow_html=True)
+                    else:  # declining
+                        st.markdown('<p class="momentum-declining">📉 Declining form</p>', unsafe_allow_html=True)
                     
                     # Stats comparison
                     st.markdown("**Last 5 vs Last 10 (Adjusted):**")
@@ -281,9 +288,13 @@ class FootballPredictorApp:
                     # Last 5 vs Last 10 comparison
                     st.markdown("**Form Momentum:**")
                     momentum = prediction['stats_analysis']['away_momentum']
-                    st.success(f"📈 {momentum.capitalize()} form") if momentum == "improving" else \
-                    st.warning(f"📊 Stable form") if momentum == "stable" else \
-                    st.error(f"📉 Declining form")
+                    
+                    if momentum == "improving":
+                        st.markdown('<p class="momentum-improving">📈 Improving form</p>', unsafe_allow_html=True)
+                    elif momentum == "stable":
+                        st.markdown('<p class="momentum-stable">📊 Stable form</p>', unsafe_allow_html=True)
+                    else:  # declining
+                        st.markdown('<p class="momentum-declining">📉 Declining form</p>', unsafe_allow_html=True)
                     
                     # Stats comparison
                     st.markdown("**Last 5 vs Last 10 (Adjusted):**")
@@ -434,6 +445,17 @@ class FootballPredictorApp:
             4. Set your bankroll parameters
             5. Get complete prediction with staking recommendation
             """)
+            
+            # Display available leagues
+            st.subheader("🏆 Available Leagues")
+            
+            for league_key, league_info in self.leagues.items():
+                with st.expander(f"{league_info['name']} ({len(league_info['teams'])} teams)"):
+                    st.dataframe(
+                        league_info['teams'][['team_name', 'matches_played', 'form_last_5']], 
+                        use_container_width=True,
+                        hide_index=True
+                    )
 
 if __name__ == "__main__":
     app = FootballPredictorApp()
