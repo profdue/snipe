@@ -44,10 +44,11 @@ class TeamStats:
 
 class CompletePhantomPredictor:
     """
-    Complete v5.2 Football Predictor with:
+    Complete v5.3 Football Predictor with:
     - Mathematically correct Poisson probabilities
     - Rule-based system with validation
     - Proper edge calculations
+    - Fixed staking for NO BET scenarios
     """
     
     def __init__(self, bankroll: float = 1000.0, min_confidence: float = 0.60):
@@ -76,8 +77,8 @@ class CompletePhantomPredictor:
         self.under_threshold_attack = 1.5
         
         # Minimum expected goals for Over bet
-        self.min_over_goals = 2.6  # Increased from 2.3
-        self.max_under_goals = 2.4  # Decreased from 2.7
+        self.min_over_goals = 2.6
+        self.max_under_goals = 2.4
         
         # Betting parameters
         self.max_stake_pct = 0.05
@@ -86,19 +87,19 @@ class CompletePhantomPredictor:
         self._init_explanation_templates()
     
     def _create_builtin_kelly(self):
-        """Create built-in Kelly calculator"""
+        """Create built-in Kelly calculator if custom one not available"""
         class BuiltInKelly:
             def __init__(self, fraction=0.5):
                 self.fraction = fraction
             
-            def calculate_stake(self, probability, odds, bankroll, max_percent=0.05):
+            def calculate_stake(self, probability, odds, bankroll, max_percent=0.05, min_probability=0.0):
                 q = 1 - probability
                 b = odds - 1
                 
                 if b <= 0 or probability <= 0:
                     kelly_fraction = 0
                 else:
-                    kelly_fraction = (probability * b - q) / b
+                    kelly_fraction = (b * p - q) / b
                 
                 # Apply fractional Kelly
                 kelly_fraction *= self.fraction
@@ -208,15 +209,15 @@ class CompletePhantomPredictor:
         home_momentum, home_momentum_mult = self._calculate_form_momentum(home_last5, home_last10)
         away_momentum, away_momentum_mult = self._calculate_form_momentum(away_last5, away_last10)
         
-        # Apply momentum to create final estimates (simplified)
+        # Apply momentum to create final estimates
         home_attack = home_last5 * home_momentum_mult
         away_attack = away_last5 * away_momentum_mult
         
         # For defense, inverse momentum if improving (better defense = lower GApg)
         if home_momentum == "improving":
-            home_defense_mult = 0.9  # Lower GApg when improving
+            home_defense_mult = 0.9
         elif home_momentum == "declining":
-            home_defense_mult = 1.1  # Higher GApg when declining
+            home_defense_mult = 1.1
         else:
             home_defense_mult = 1.0
             
@@ -339,7 +340,31 @@ class CompletePhantomPredictor:
             prediction, expected_goals, poisson_prob, market_odd
         )
         
-        # If No Bet, return early
+        # Calculate stake using Kelly calculator (works for both BET and NO BET)
+        staking_result = self.kelly.calculate_stake(
+            probability=final_probability,
+            odds=market_odd,
+            bankroll=bankroll,
+            min_probability=self.min_confidence
+        )
+        
+        # Convert staking result to dictionary
+        if hasattr(staking_result, 'stake_amount'):  # If using custom Kelly class
+            staking_info = {
+                'stake_amount': staking_result.stake_amount,
+                'stake_percent': staking_result.stake_percent,
+                'kelly_fraction': staking_result.kelly_fraction,
+                'expected_value': staking_result.expected_value,
+                'risk_level': staking_result.risk_level,
+                'edge_percent': staking_result.edge_percent,
+                'value_rating': staking_result.value_rating,
+                'implied_probability': staking_result.implied_probability,
+                'true_probability': staking_result.true_probability
+            }
+        else:  # If using built-in dictionary
+            staking_info = staking_result
+        
+        # If No Bet, create explanation
         if final_prediction == "No Bet":
             # Determine why no bet
             implied_prob = 1 / market_odd if market_odd > 0 else 0
@@ -370,20 +395,15 @@ class CompletePhantomPredictor:
                 'expected_goals': expected_goals,
                 'rule_number': rule_number,
                 'explanation': explanation,
-                'staking_info': {
-                    'stake_amount': 0.0,
-                    'stake_percent': 0.0,
-                    'edge_percent': edge * 100,
-                    'expected_value': 0.0,
-                    'risk_level': 'No Bet',
-                    'value_rating': 'Poor'
-                },
+                'staking_info': staking_info,  # This now has ALL required keys
                 'market_odds': market_odd,
                 'poisson_details': {
                     'lambda_home': stats['lambda_home'],
                     'lambda_away': stats['lambda_away'],
                     'expected_home_goals': stats['lambda_home'],
-                    'expected_away_goals': stats['lambda_away']
+                    'expected_away_goals': stats['lambda_away'],
+                    'home_momentum': stats['home_momentum'],
+                    'away_momentum': stats['away_momentum']
                 },
                 'stats_analysis': {
                     'home_attack': stats['home_attack'],
@@ -395,15 +415,7 @@ class CompletePhantomPredictor:
                 }
             }
         
-        # Calculate stake
-        staking_info = self.kelly.calculate_stake(
-            probability=final_probability,
-            odds=market_odd,
-            bankroll=bankroll,
-            max_percent=self.max_stake_pct
-        )
-        
-        # Generate explanation
+        # If it's a bet, create bet explanation
         explanation = self.explanation_templates[rule_number].format(
             prediction=final_prediction,
             total_goals=expected_goals,
@@ -411,7 +423,7 @@ class CompletePhantomPredictor:
             edge=staking_info['edge_percent']
         )
         
-        # Return complete prediction
+        # Return complete prediction for betting scenario
         return {
             'prediction': final_prediction,
             'confidence': final_confidence,
@@ -425,7 +437,9 @@ class CompletePhantomPredictor:
                 'lambda_home': stats['lambda_home'],
                 'lambda_away': stats['lambda_away'],
                 'expected_home_goals': stats['lambda_home'],
-                'expected_away_goals': stats['lambda_away']
+                'expected_away_goals': stats['lambda_away'],
+                'home_momentum': stats['home_momentum'],
+                'away_momentum': stats['away_momentum']
             },
             'stats_analysis': {
                 'home_attack': stats['home_attack'],
@@ -436,3 +450,11 @@ class CompletePhantomPredictor:
                 'away_momentum': stats['away_momentum']
             }
         }
+    
+    # Keep compatibility method
+    def predict_match(self, home_stats: dict, away_stats: dict,
+                     over_odds: float, under_odds: float, 
+                     league: str = "default", bankroll: float = None) -> Dict:
+        """Alternative method that accepts separate odds"""
+        market_odds = {'over_25': over_odds, 'under_25': under_odds}
+        return self.predict_with_staking(home_stats, away_stats, market_odds, league, bankroll)
