@@ -55,7 +55,6 @@ class EdgeFinderFootballApp:
                                     'team_names': team_names
                                 }
                                 
-                                st.success(f"✅ Loaded {len(team_names)} teams from {display_name}")
                                 break  # Found a CSV, move to next league
                                 
                             except Exception as e:
@@ -108,14 +107,10 @@ class EdgeFinderFootballApp:
         }
     
     def create_team_stats(self, team_data: pd.Series) -> EnhancedTeamStats:
-        """Create EnhancedTeamStats object from CSV data"""
-        # Convert to dictionary and handle missing values
+        """Create EnhancedTeamStats object from CSV data with proper cleaning"""
         data_dict = {}
         
-        # Get all fields from EnhancedTeamStats
-        from models.edgefinder_predictor import EnhancedTeamStats
-        
-        # Define expected fields with their types
+        # Define all expected fields
         expected_fields = {
             # Identity Metrics
             'team_name': str, 'matches_played': int, 'possession_avg': float,
@@ -144,14 +139,36 @@ class EdgeFinderFootballApp:
         for field, field_type in expected_fields.items():
             if field in team_data:
                 value = team_data[field]
-                # Handle NaN values
-                if pd.isna(value):
-                    # Set defaults based on type
+                
+                # Special handling for percentage fields
+                if field in ['possession_avg', 'conversion_rate', 'clean_sheet_pct', 
+                            'clean_sheet_pct_home', 'clean_sheet_pct_away',
+                            'failed_to_score_pct', 'failed_to_score_pct_home', 'failed_to_score_pct_away',
+                            'btts_pct', 'btts_pct_home', 'btts_pct_away',
+                            'over25_pct', 'over25_pct_home', 'over25_pct_away']:
+                    
+                    if isinstance(value, str):
+                        # Remove % and convert
+                        try:
+                            cleaned = value.replace('%', '').strip()
+                            if cleaned:
+                                data_dict[field] = float(cleaned)
+                            else:
+                                data_dict[field] = 0.0
+                        except:
+                            data_dict[field] = 0.0
+                    elif pd.isna(value):
+                        data_dict[field] = 0.0
+                    else:
+                        data_dict[field] = float(value)
+                        
+                # Handle other fields
+                elif pd.isna(value):
                     if field_type == str:
                         data_dict[field] = ""
                     elif field_type == int:
                         data_dict[field] = 0
-                    else:  # float
+                    else:
                         data_dict[field] = 0.0
                 else:
                     # Convert to correct type
@@ -159,11 +176,15 @@ class EdgeFinderFootballApp:
                         if field_type == str:
                             data_dict[field] = str(value)
                         elif field_type == int:
-                            data_dict[field] = int(float(value))
+                            # Handle floats that should be ints
+                            if isinstance(value, float):
+                                data_dict[field] = int(value)
+                            else:
+                                data_dict[field] = int(float(value))
                         else:  # float
                             data_dict[field] = float(value)
                     except:
-                        # If conversion fails, use default
+                        # Default on error
                         if field_type == str:
                             data_dict[field] = ""
                         elif field_type == int:
@@ -171,7 +192,7 @@ class EdgeFinderFootballApp:
                         else:
                             data_dict[field] = 0.0
             else:
-                # Field not in CSV, use default
+                # Field not in CSV
                 if field_type == str:
                     data_dict[field] = ""
                 elif field_type == int:
