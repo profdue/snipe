@@ -44,7 +44,7 @@ class TeamStats:
 
 class CompletePhantomPredictor:
     """
-    Complete v5.2 Football Predictor with CORRECT probability calculations
+    Complete v5.3 Football Predictor with improved edge detection
     """
     
     def __init__(self, bankroll: float = 1000.0, min_confidence: float = 0.60):
@@ -75,30 +75,17 @@ class CompletePhantomPredictor:
             'initial_variance': 0.5
         }
         
-        # Bayesian parameters
-        self.prior_over = 0.50
-        self.prior_under = 0.50
-        
-        # Likelihood distributions
-        self.likelihoods = {
-            'over': {
-                'last10_mean': 2.8,
-                'last10_std': 0.5
-            },
-            'under': {
-                'last10_mean': 2.0,
-                'last10_std': 0.5
-            }
-        }
-        
-        # Thresholds
+        # Thresholds with buffers
         self.over_threshold = 1.5
         self.under_threshold_defense = 1.0
         self.under_threshold_attack = 1.5
         
-        # Validation thresholds
-        self.min_over_goals = 2.5
-        self.max_under_goals = 2.5
+        # Validation thresholds with buffers
+        self.min_over_goals = 2.3  # Buffer: can bet Over if >= 2.3
+        self.max_under_goals = 2.7  # Buffer: can bet Under if <= 2.7
+        
+        # Edge thresholds
+        self.min_edge_for_bet = 0.02  # 2% minimum edge
         
         # Betting parameters
         self.max_stake_pct = 0.05
@@ -169,43 +156,19 @@ class CompletePhantomPredictor:
     def _init_explanation_templates(self):
         """Initialize explanation templates"""
         self.explanation_templates = {
-            1: (
-                "High Confidence {prediction}: Both teams >1.5 GPG in last 10 & last 5. "
-                "Expected goals: {total_goals:.2f}. Poisson P(Over): {poisson_prob:.1%}. "
-                "Edge: {edge:.1f}%."
-            ),
-            2: (
-                "High Confidence {prediction}: Defense <1.0 GApg vs Attack <1.5 GPG. "
-                "Expected goals: {total_goals:.2f}. Poisson P(Under): {poisson_prob:.1%}. "
-                "Edge: {edge:.1f}%."
-            ),
-            3: (
-                "Moderate Confidence {prediction}: Last 5 attacking form. "
-                "Expected goals: {total_goals:.2f}. Poisson P(Over): {poisson_prob:.1%}. "
-                "Edge: {edge:.1f}%."
-            ),
-            4: (
-                "Moderate Confidence {prediction}: Last 5 defense vs attack mismatch. "
-                "Expected goals: {total_goals:.2f}. Poisson P(Under): {poisson_prob:.1%}. "
-                "Edge: {edge:.1f}%."
-            ),
-            5: (
-                "Low Confidence {prediction}: xG-based edge. "
-                "Expected goals: {total_goals:.2f}. Poisson P: {poisson_prob:.1%}. "
-                "Edge: {edge:.1f}%."
-            )
+            1: "Rule 1: Both teams >1.5 GPG. Expected goals: {total_goals:.2f}. Edge: {edge:.1f}%.",
+            2: "Rule 2: Strong defense vs weak attack. Expected goals: {total_goals:.2f}. Edge: {edge:.1f}%.",
+            3: "Rule 3: Last 5 attacking form. Expected goals: {total_goals:.2f}. Edge: {edge:.1f}%.",
+            4: "Rule 4: Last 5 defense vs attack. Expected goals: {total_goals:.2f}. Edge: {edge:.1f}%.",
+            5: "Rule 5: xG-based edge. Expected goals: {total_goals:.2f}. Edge: {edge:.1f}%.",
+            'no_bet_rule': "Rule #{rule} triggered but expected goals ({total_goals:.2f}) doesn't support {prediction}.",
+            'no_bet_edge': "No statistical edge. Expected goals: {total_goals:.2f}. Best probability: {probability:.1%} vs market {market_prob:.1%}.",
+            'value_bet': "Value bet detected. Expected goals: {total_goals:.2f}. {prediction} probability: {probability:.1%} vs market {market_prob:.1%}. Edge: {edge:.1f}%."
         }
     
     def poisson_pmf(self, k: int, lambd: float) -> float:
         """Calculate Poisson probability mass function"""
         return (lambd ** k * math.exp(-lambd)) / math.factorial(k)
-    
-    def normal_pdf(self, x: float, mean: float, std: float) -> float:
-        """Normal probability density function"""
-        if std <= 0:
-            return 0.0
-        exponent = -((x - mean) ** 2) / (2 * std ** 2)
-        return (1.0 / (std * np.sqrt(2 * np.pi))) * np.exp(exponent)
     
     def calculate_poisson_probability(self, expected_goals: float) -> float:
         """Calculate P(Over 2.5) from Poisson distribution"""
@@ -314,82 +277,60 @@ class CompletePhantomPredictor:
             'kalman_away': away_final
         }
     
-    def _apply_five_rules_with_validation(self, stats: Dict, expected_goals: float) -> Tuple[str, str, int, float]:
+    def _apply_rules_with_edge_detection(self, stats: Dict, expected_goals: float,
+                                        over_odds: float, under_odds: float) -> Tuple[str, str, int, float]:
         """
-        Enhanced 5-rule system with validation
+        Apply rules and check for value on BOTH sides
         """
-        # Rule 1: High Confidence Over
-        rule1_condition = (
-            stats['home_last10'] > self.over_threshold and
-            stats['away_last10'] > self.over_threshold and
-            stats['home_last5'] > self.over_threshold and
-            stats['away_last5'] > self.over_threshold
-        )
+        # Calculate Poisson probabilities
+        poisson_prob_over = self.calculate_poisson_probability(expected_goals)
+        poisson_prob_under = 1 - poisson_prob_over
         
-        if rule1_condition:
+        # Calculate edges
+        edge_over = poisson_prob_over - (1 / over_odds if over_odds > 0 else 0)
+        edge_under = poisson_prob_under - (1 / under_odds if under_odds > 0 else 0)
+        
+        # Check rules but prioritize value
+        best_edge = max(edge_over, edge_under)
+        
+        # If no edge, return No Bet
+        if best_edge < self.min_edge_for_bet:
+            return "No Bet", "None", 5, 0
+        
+        # Determine which side has value
+        if edge_over >= edge_under and edge_over >= self.min_edge_for_bet:
+            # Check if Over makes sense
             if expected_goals >= self.min_over_goals:
-                confidence_boost = 0.05 if (stats['home_momentum'] == "improving" or 
-                                           stats['away_momentum'] == "improving") else 0
-                return "Over 2.5", "High", 1, confidence_boost
-            else:
-                return "No Bet", "None", 1, 0
-        
-        # Rule 2: High Confidence Under
-        rule2_condition = (
-            stats['home_defense'] < self.under_threshold_defense and
-            stats['away_attack'] < self.under_threshold_attack and
-            stats['home_last5_gapg'] < self.under_threshold_defense and
-            stats['away_last5'] < self.under_threshold_attack
-        )
-        
-        if rule2_condition:
+                # Apply rule logic for confidence
+                if (stats['home_last10'] > self.over_threshold and
+                    stats['away_last10'] > self.over_threshold and
+                    stats['home_last5'] > self.over_threshold and
+                    stats['away_last5'] > self.over_threshold):
+                    return "Over 2.5", "High", 1, 0.05
+                elif (stats['home_last5'] > self.over_threshold and
+                      stats['away_last5'] > self.over_threshold):
+                    return "Over 2.5", "Moderate", 3, 0.03
+                else:
+                    return "Over 2.5", "Low", 5, 0
+        elif edge_under >= edge_over and edge_under >= self.min_edge_for_bet:
+            # Check if Under makes sense
             if expected_goals <= self.max_under_goals:
-                confidence_boost = 0.05 if (stats['home_momentum'] == "improving" or 
-                                           stats['away_momentum'] == "declining") else 0
-                return "Under 2.5", "High", 2, confidence_boost
-            else:
-                return "No Bet", "None", 2, 0
-        
-        # Rule 3: Moderate Over
-        rule3_condition = (
-            stats['home_last5'] > self.over_threshold and
-            stats['away_last5'] > self.over_threshold
-        )
-        
-        if rule3_condition:
-            if expected_goals >= self.min_over_goals:
-                momentum_bonus = 0.03 if (stats['home_momentum'] == "improving" or 
-                                         stats['away_momentum'] == "improving") else 0
-                return "Over 2.5", "Moderate", 3, momentum_bonus
-            else:
-                return "No Bet", "None", 3, 0
-        
-        # Rule 4: Moderate Under
-        rule4_condition = (
-            stats['home_last5_gapg'] < self.under_threshold_defense and
-            stats['away_last5'] < self.under_threshold_attack
-        )
-        
-        if rule4_condition:
-            if expected_goals <= self.max_under_goals:
-                momentum_bonus = 0.03 if (stats['home_momentum'] == "improving" or 
-                                         stats['away_momentum'] == "declining") else 0
-                return "Under 2.5", "Moderate", 4, momentum_bonus
-            else:
-                return "No Bet", "None", 4, 0
-        
-        # Rule 5: xG-based
-        xg_avg = (stats['home_xg'] + stats['away_xg']) / 2
-        
-        if xg_avg > 1.8 and expected_goals >= 2.5:
-            return "Over 2.5", "Low", 5, 0
-        elif xg_avg < 1.2 and expected_goals <= 2.5:
-            return "Under 2.5", "Low", 5, 0
+                # Apply rule logic for confidence
+                if (stats['home_defense'] < self.under_threshold_defense and
+                    stats['away_attack'] < self.under_threshold_attack and
+                    stats['home_last5_gapg'] < self.under_threshold_defense and
+                    stats['away_last5'] < self.under_threshold_attack):
+                    return "Under 2.5", "High", 2, 0.05
+                elif (stats['home_last5_gapg'] < self.under_threshold_defense and
+                      stats['away_last5'] < self.under_threshold_attack):
+                    return "Under 2.5", "Moderate", 4, 0.03
+                else:
+                    return "Under 2.5", "Low", 5, 0
         
         return "No Bet", "None", 5, 0
     
     def _calculate_expected_goals(self, stats: Dict) -> Tuple[float, Dict]:
-        """Calculate expected goals using proper Poisson formula"""
+        """Calculate expected goals"""
         context = stats['league_context']
         
         lambda_home = (stats['home_attack'] * 
@@ -404,8 +345,6 @@ class CompletePhantomPredictor:
         return expected_goals, {
             'lambda_home': lambda_home,
             'lambda_away': lambda_away,
-            'home_momentum': stats['home_momentum'],
-            'away_momentum': stats['away_momentum'],
             'expected_home_goals': lambda_home,
             'expected_away_goals': lambda_away
         }
@@ -442,7 +381,7 @@ class CompletePhantomPredictor:
                            market_odds: dict, league: str = "default", 
                            bankroll: float = None) -> Dict:
         """
-        Complete prediction pipeline with proper error handling
+        Complete prediction pipeline with value detection
         """
         if bankroll is None:
             bankroll = self.bankroll
@@ -457,42 +396,61 @@ class CompletePhantomPredictor:
             # Calculate expected goals
             expected_goals, poisson_details = self._calculate_expected_goals(stats)
             
-            # Calculate TRUE Poisson probability
+            # Apply rules with edge detection
+            prediction, confidence, rule_number, confidence_boost = self._apply_rules_with_edge_detection(
+                stats, expected_goals, over_odds, under_odds
+            )
+            
+            # Calculate Poisson probabilities
             poisson_prob_over = self.calculate_poisson_probability(expected_goals)
             poisson_prob_under = 1 - poisson_prob_over
             
-            # Apply rules with validation
-            prediction, confidence, rule_number, confidence_boost = self._apply_five_rules_with_validation(
-                stats, expected_goals
-            )
-            
-            # Determine which odds to use for display
-            display_odds = over_odds if poisson_prob_over > poisson_prob_under else under_odds
-            
-            # Create complete base staking info for NO BET case
-            base_staking_info = {
-                'stake_amount': 0.0,
-                'stake_percent': 0.0,
-                'kelly_fraction': 0.0,
-                'expected_value': 0.0,
-                'risk_level': 'No Bet',
-                'edge_percent': 0.0,
-                'value_rating': 'None',
-                'implied_probability': 1 / display_odds if display_odds > 0 else 0.0,
-                'true_probability': max(poisson_prob_over, poisson_prob_under)
-            }
-            
-            # If No Bet, return early with complete staking info
-            if prediction == "No Bet":
-                explanation = f"No Bet: Expected goals {expected_goals:.2f} doesn't support any clear prediction."
+            # Determine market odds and probabilities
+            if prediction == "Over 2.5":
+                base_probability = poisson_prob_over
+                market_odd = over_odds
+                implied_prob = 1 / over_odds if over_odds > 0 else 0
+            elif prediction == "Under 2.5":
+                base_probability = poisson_prob_under
+                market_odd = under_odds
+                implied_prob = 1 / under_odds if under_odds > 0 else 0
+            else:  # No Bet
+                # Find which side has better probability for display
+                if poisson_prob_over > poisson_prob_under:
+                    display_prob = poisson_prob_over
+                    display_odds = over_odds
+                    implied_prob = 1 / over_odds if over_odds > 0 else 0
+                else:
+                    display_prob = poisson_prob_under
+                    display_odds = under_odds
+                    implied_prob = 1 / under_odds if under_odds > 0 else 0
+                
+                edge = display_prob - implied_prob
+                
+                explanation = self.explanation_templates['no_bet_edge'].format(
+                    total_goals=expected_goals,
+                    probability=display_prob,
+                    market_prob=implied_prob
+                )
+                
                 return {
                     'prediction': 'NO BET',
                     'confidence': 'None',
-                    'probability': max(poisson_prob_over, poisson_prob_under),
+                    'probability': display_prob,
                     'expected_goals': expected_goals,
                     'rule_number': rule_number,
                     'explanation': explanation,
-                    'staking_info': base_staking_info,
+                    'staking_info': {
+                        'stake_amount': 0.0,
+                        'stake_percent': 0.0,
+                        'kelly_fraction': 0.0,
+                        'expected_value': 0.0,
+                        'risk_level': 'No Bet',
+                        'edge_percent': edge * 100,
+                        'value_rating': 'None',
+                        'implied_probability': implied_prob,
+                        'true_probability': display_prob
+                    },
                     'market_odds': display_odds,
                     'poisson_details': poisson_details,
                     'stats_analysis': {
@@ -505,15 +463,7 @@ class CompletePhantomPredictor:
                     }
                 }
             
-            # Determine final probability
-            if prediction == "Over 2.5":
-                base_probability = poisson_prob_over
-                market_odd = over_odds
-            else:  # Under 2.5
-                base_probability = poisson_prob_under
-                market_odd = under_odds
-            
-            # Apply small confidence boost
+            # Apply confidence boost
             final_probability = min(0.95, base_probability + confidence_boost)
             
             # Calculate stake
@@ -523,7 +473,7 @@ class CompletePhantomPredictor:
             explanation = self._generate_explanation(
                 prediction, confidence, rule_number, stats, 
                 final_probability, staking_info['edge_percent'],
-                expected_goals, poisson_prob_over if prediction == "Over 2.5" else poisson_prob_under
+                expected_goals, base_probability, implied_prob
             )
             
             return {
@@ -547,7 +497,6 @@ class CompletePhantomPredictor:
             }
             
         except Exception as e:
-            # Return error result
             return {
                 'prediction': 'ERROR',
                 'confidence': 'None',
@@ -573,13 +522,19 @@ class CompletePhantomPredictor:
     
     def _generate_explanation(self, prediction: str, confidence: str, rule_number: int, 
                             stats: Dict, probability: float, edge: float,
-                            expected_goals: float, poisson_prob: float) -> str:
+                            expected_goals: float, base_prob: float, market_prob: float) -> str:
         """Generate explanation"""
+        
+        if edge <= 0:
+            return self.explanation_templates['no_bet_edge'].format(
+                total_goals=expected_goals,
+                probability=base_prob,
+                market_prob=market_prob
+            )
         
         template_vars = {
             'prediction': prediction,
             'total_goals': expected_goals,
-            'poisson_prob': poisson_prob,
             'edge': edge,
             'probability': probability,
         }
@@ -588,7 +543,13 @@ class CompletePhantomPredictor:
         if template:
             return template.format(**template_vars)
         
-        return f"{confidence} confidence {prediction}. Expected goals: {expected_goals:.2f}, P={probability:.1%}, Edge: {edge:.1f}%"
+        return self.explanation_templates['value_bet'].format(
+            prediction=prediction,
+            total_goals=expected_goals,
+            probability=base_prob,
+            market_prob=market_prob,
+            edge=edge
+        )
     
     # Keep the original predict_match method for compatibility
     def predict_match(self, home_stats: dict, away_stats: dict,
