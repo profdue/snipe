@@ -3,4 +3,3 @@ pandas==2.1.4
 numpy==1.26.2
 plotly==5.18.0  # For advanced visualizations (optional)
  
-pandas>=1.3.0
