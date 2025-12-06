@@ -3,7 +3,7 @@ import math
 import pandas as pd
 from typing import Dict, Tuple, Optional, List, Any
 from dataclasses import dataclass
-from scipy.stats import poisson, norm
+#from scipy.stats import poisson, norm
 from collections import deque
 import warnings
 
