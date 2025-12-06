@@ -75,19 +75,19 @@ class CompletePhantomPredictor:
             'initial_variance': 0.5
         }
         
-        # FIXED: Better Bayesian parameters
-        self.prior_over = 0.50  # Start with 50/50
+        # Bayesian parameters
+        self.prior_over = 0.50
         self.prior_under = 0.50
         
-        # FIXED: Wider likelihood distributions
+        # Likelihood distributions
         self.likelihoods = {
             'over': {
-                'last10_mean': 2.8,   # Higher mean for Bundesliga
-                'last10_std': 0.5     # Wider distribution
+                'last10_mean': 2.8,
+                'last10_std': 0.5
             },
             'under': {
-                'last10_mean': 2.0,   # Higher mean
-                'last10_std': 0.5     # Wider distribution
+                'last10_mean': 2.0,
+                'last10_std': 0.5
             }
         }
         
@@ -97,8 +97,8 @@ class CompletePhantomPredictor:
         self.under_threshold_attack = 1.5
         
         # Validation thresholds
-        self.min_over_goals = 2.5  # Must be >= 2.5 for Over!
-        self.max_under_goals = 2.5  # Must be <= 2.5 for Under!
+        self.min_over_goals = 2.5
+        self.max_under_goals = 2.5
         
         # Betting parameters
         self.max_stake_pct = 0.05
@@ -327,7 +327,6 @@ class CompletePhantomPredictor:
         )
         
         if rule1_condition:
-            # FIXED: Must have expected goals >= 2.5 for Over!
             if expected_goals >= self.min_over_goals:
                 confidence_boost = 0.05 if (stats['home_momentum'] == "improving" or 
                                            stats['away_momentum'] == "improving") else 0
@@ -393,7 +392,6 @@ class CompletePhantomPredictor:
         """Calculate expected goals using proper Poisson formula"""
         context = stats['league_context']
         
-        # Proper Poisson expected goals
         lambda_home = (stats['home_attack'] * 
                       (stats['away_defense'] / context['avg_gapg']) * 
                       (1 + context['home_advantage']))
@@ -412,102 +410,6 @@ class CompletePhantomPredictor:
             'expected_away_goals': lambda_away
         }
     
-    def predict_with_staking(self, home_stats: dict, away_stats: dict,
-                           market_odds: dict, league: str = "default", 
-                           bankroll: float = None) -> Dict:
-        """
-        CORRECTED prediction pipeline
-        """
-        if bankroll is None:
-            bankroll = self.bankroll
-        
-        over_odds = market_odds.get('over_25', 1.85)
-        under_odds = market_odds.get('under_25', 1.95)
-        
-        # Prepare stats
-        stats = self._prepare_stats_for_prediction(home_stats, away_stats, league)
-        
-        # Calculate expected goals
-        expected_goals, poisson_details = self._calculate_expected_goals(stats)
-        
-        # Calculate TRUE Poisson probability
-        poisson_prob_over = self.calculate_poisson_probability(expected_goals)
-        poisson_prob_under = 1 - poisson_prob_over
-        
-        # Apply rules with validation
-        prediction, confidence, rule_number, confidence_boost = self._apply_five_rules_with_validation(
-            stats, expected_goals
-        )
-        
-        # Determine final probability (USE POISSON, not inflated Bayesian!)
-        if prediction == "Over 2.5":
-            base_probability = poisson_prob_over
-            market_odd = over_odds
-        elif prediction == "Under 2.5":
-            base_probability = poisson_prob_under
-            market_odd = under_odds
-        else:  # No Bet
-            explanation = f"No Bet: Expected goals {expected_goals:.2f} doesn't support any clear prediction."
-            return {
-                'prediction': 'NO BET',
-                'confidence': 'None',
-                'probability': max(poisson_prob_over, poisson_prob_under),
-                'expected_goals': expected_goals,
-                'rule_number': rule_number,
-                'explanation': explanation,
-                'staking_info': {
-                    'stake_amount': 0.0,
-                    'stake_percent': 0.0,
-                    'edge_percent': 0.0,
-                    'expected_value': 0.0,
-                    'risk_level': 'No Bet',
-                    'value_rating': 'None'
-                },
-                'market_odds': over_odds if poisson_prob_over > poisson_prob_under else under_odds,
-                'poisson_details': poisson_details,
-                'stats_analysis': {
-                    'home_attack': stats['home_attack'],
-                    'home_defense': stats['home_defense'],
-                    'away_attack': stats['away_attack'],
-                    'away_defense': stats['away_defense'],
-                    'home_momentum': stats['home_momentum'],
-                    'away_momentum': stats['away_momentum']
-                }
-            }
-        
-        # Apply small confidence boost
-        final_probability = min(0.95, base_probability + confidence_boost)
-        
-        # Calculate stake
-        staking_info = self._calculate_stake(final_probability, market_odd, confidence, bankroll)
-        
-        # Generate explanation
-        explanation = self._generate_explanation(
-            prediction, confidence, rule_number, stats, 
-            final_probability, staking_info['edge_percent'],
-            expected_goals, poisson_prob_over if prediction == "Over 2.5" else poisson_prob_under
-        )
-        
-        return {
-            'prediction': prediction,
-            'confidence': confidence,
-            'probability': final_probability,
-            'expected_goals': expected_goals,
-            'rule_number': rule_number,
-            'explanation': explanation,
-            'staking_info': staking_info,
-            'market_odds': market_odd,
-            'poisson_details': poisson_details,
-            'stats_analysis': {
-                'home_attack': stats['home_attack'],
-                'home_defense': stats['home_defense'],
-                'away_attack': stats['away_attack'],
-                'away_defense': stats['away_defense'],
-                'home_momentum': stats['home_momentum'],
-                'away_momentum': stats['away_momentum']
-            }
-        }
-    
     def _calculate_stake(self, probability: float, odds: float, confidence: str, 
                         bankroll: float) -> Dict:
         """Calculate stake using Kelly"""
@@ -523,7 +425,8 @@ class CompletePhantomPredictor:
                 'risk_level': 'No Bet',
                 'edge_percent': 0.0,
                 'value_rating': 'None',
-                'implied_probability': 1 / odds if odds > 0 else 0.0
+                'implied_probability': 1 / odds if odds > 0 else 0.0,
+                'true_probability': probability
             }
         
         staking_result = self.kelly.calculate_stake(
@@ -534,6 +437,139 @@ class CompletePhantomPredictor:
         )
         
         return staking_result
+    
+    def predict_with_staking(self, home_stats: dict, away_stats: dict,
+                           market_odds: dict, league: str = "default", 
+                           bankroll: float = None) -> Dict:
+        """
+        Complete prediction pipeline with proper error handling
+        """
+        if bankroll is None:
+            bankroll = self.bankroll
+        
+        over_odds = market_odds.get('over_25', 1.85)
+        under_odds = market_odds.get('under_25', 1.95)
+        
+        try:
+            # Prepare stats
+            stats = self._prepare_stats_for_prediction(home_stats, away_stats, league)
+            
+            # Calculate expected goals
+            expected_goals, poisson_details = self._calculate_expected_goals(stats)
+            
+            # Calculate TRUE Poisson probability
+            poisson_prob_over = self.calculate_poisson_probability(expected_goals)
+            poisson_prob_under = 1 - poisson_prob_over
+            
+            # Apply rules with validation
+            prediction, confidence, rule_number, confidence_boost = self._apply_five_rules_with_validation(
+                stats, expected_goals
+            )
+            
+            # Determine which odds to use for display
+            display_odds = over_odds if poisson_prob_over > poisson_prob_under else under_odds
+            
+            # Create complete base staking info for NO BET case
+            base_staking_info = {
+                'stake_amount': 0.0,
+                'stake_percent': 0.0,
+                'kelly_fraction': 0.0,
+                'expected_value': 0.0,
+                'risk_level': 'No Bet',
+                'edge_percent': 0.0,
+                'value_rating': 'None',
+                'implied_probability': 1 / display_odds if display_odds > 0 else 0.0,
+                'true_probability': max(poisson_prob_over, poisson_prob_under)
+            }
+            
+            # If No Bet, return early with complete staking info
+            if prediction == "No Bet":
+                explanation = f"No Bet: Expected goals {expected_goals:.2f} doesn't support any clear prediction."
+                return {
+                    'prediction': 'NO BET',
+                    'confidence': 'None',
+                    'probability': max(poisson_prob_over, poisson_prob_under),
+                    'expected_goals': expected_goals,
+                    'rule_number': rule_number,
+                    'explanation': explanation,
+                    'staking_info': base_staking_info,
+                    'market_odds': display_odds,
+                    'poisson_details': poisson_details,
+                    'stats_analysis': {
+                        'home_attack': stats['home_attack'],
+                        'home_defense': stats['home_defense'],
+                        'away_attack': stats['away_attack'],
+                        'away_defense': stats['away_defense'],
+                        'home_momentum': stats['home_momentum'],
+                        'away_momentum': stats['away_momentum']
+                    }
+                }
+            
+            # Determine final probability
+            if prediction == "Over 2.5":
+                base_probability = poisson_prob_over
+                market_odd = over_odds
+            else:  # Under 2.5
+                base_probability = poisson_prob_under
+                market_odd = under_odds
+            
+            # Apply small confidence boost
+            final_probability = min(0.95, base_probability + confidence_boost)
+            
+            # Calculate stake
+            staking_info = self._calculate_stake(final_probability, market_odd, confidence, bankroll)
+            
+            # Generate explanation
+            explanation = self._generate_explanation(
+                prediction, confidence, rule_number, stats, 
+                final_probability, staking_info['edge_percent'],
+                expected_goals, poisson_prob_over if prediction == "Over 2.5" else poisson_prob_under
+            )
+            
+            return {
+                'prediction': prediction,
+                'confidence': confidence,
+                'probability': final_probability,
+                'expected_goals': expected_goals,
+                'rule_number': rule_number,
+                'explanation': explanation,
+                'staking_info': staking_info,
+                'market_odds': market_odd,
+                'poisson_details': poisson_details,
+                'stats_analysis': {
+                    'home_attack': stats['home_attack'],
+                    'home_defense': stats['home_defense'],
+                    'away_attack': stats['away_attack'],
+                    'away_defense': stats['away_defense'],
+                    'home_momentum': stats['home_momentum'],
+                    'away_momentum': stats['away_momentum']
+                }
+            }
+            
+        except Exception as e:
+            # Return error result
+            return {
+                'prediction': 'ERROR',
+                'confidence': 'None',
+                'probability': 0.5,
+                'expected_goals': 2.5,
+                'rule_number': 0,
+                'explanation': f"Prediction error: {str(e)}",
+                'staking_info': {
+                    'stake_amount': 0.0,
+                    'stake_percent': 0.0,
+                    'kelly_fraction': 0.0,
+                    'expected_value': 0.0,
+                    'risk_level': 'Error',
+                    'edge_percent': 0.0,
+                    'value_rating': 'None',
+                    'implied_probability': 0.5,
+                    'true_probability': 0.5
+                },
+                'market_odds': 2.0,
+                'poisson_details': {},
+                'stats_analysis': {}
+            }
     
     def _generate_explanation(self, prediction: str, confidence: str, rule_number: int, 
                             stats: Dict, probability: float, edge: float,
@@ -553,3 +589,11 @@ class CompletePhantomPredictor:
             return template.format(**template_vars)
         
         return f"{confidence} confidence {prediction}. Expected goals: {expected_goals:.2f}, P={probability:.1%}, Edge: {edge:.1f}%"
+    
+    # Keep the original predict_match method for compatibility
+    def predict_match(self, home_stats: dict, away_stats: dict,
+                     over_odds: float, under_odds: float, 
+                     league: str = "default", bankroll: float = None) -> Dict:
+        """Alternative method that accepts separate odds"""
+        market_odds = {'over_25': over_odds, 'under_25': under_odds}
+        return self.predict_with_staking(home_stats, away_stats, market_odds, league, bankroll)
