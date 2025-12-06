@@ -4,6 +4,13 @@ import pandas as pd
 from typing import Dict, Tuple, Optional, List, Any
 from dataclasses import dataclass
 
+# Import your existing KellyCriterion
+try:
+    from models.staking import KellyCriterion
+    USE_CUSTOM_STAKING = True
+except ImportError:
+    USE_CUSTOM_STAKING = False
+
 @dataclass
 class TeamStats:
     """Container for team statistics from CSV"""
@@ -37,16 +44,22 @@ class TeamStats:
 
 class CompletePhantomPredictor:
     """
-    Complete v5.0 Football Predictor with:
+    Complete v5.1 Football Predictor with:
     - Kalman Filter for optimal Last5/Last10 fusion
     - Bayesian probability calculation
-    - Hybrid decision system
-    - Kelly staking with confidence weighting
+    - Hybrid decision system with rule-validation
+    - Integrated Kelly staking
     """
     
     def __init__(self, bankroll: float = 1000.0, min_confidence: float = 0.60):
         self.bankroll = bankroll
         self.min_confidence = min_confidence
+        
+        # Initialize Kelly Criterion (use custom or built-in)
+        if USE_CUSTOM_STAKING:
+            self.kelly = KellyCriterion(fraction=0.5)
+        else:
+            self.kelly = self._create_builtin_kelly()
         
         # League context
         self.league_context = {
@@ -91,30 +104,119 @@ class CompletePhantomPredictor:
         self.under_threshold_defense = 1.0
         self.under_threshold_attack = 1.5
         
+        # Validation thresholds
+        self.min_over_goals = 2.3  # Minimum expected goals for Over bet
+        self.max_under_goals = 2.7  # Maximum expected goals for Under bet
+        
         # Betting parameters
-        self.kelly_fraction = 0.25
         self.max_stake_pct = 0.05
         
         # Explanation templates
         self._init_explanation_templates()
+    
+    def _create_builtin_kelly(self):
+        """Create built-in Kelly calculator if custom one not available"""
+        class BuiltInKelly:
+            def __init__(self, fraction=0.5):
+                self.fraction = fraction
+            
+            def calculate_stake(self, probability, odds, bankroll, max_percent=0.05):
+                q = 1 - probability
+                b = odds - 1
+                
+                if b <= 0 or probability <= 0:
+                    kelly_fraction = 0
+                else:
+                    kelly_fraction = (probability * b - q) / b
+                
+                # Apply fractional Kelly
+                kelly_fraction *= self.fraction
+                kelly_fraction = max(0, kelly_fraction)
+                
+                # Calculate stake
+                stake_amount = bankroll * kelly_fraction
+                
+                # Apply maximum stake limit
+                max_stake = bankroll * max_percent
+                stake_amount = min(stake_amount, max_stake)
+                
+                # Calculate expected value
+                expected_value = (probability * (stake_amount * (odds - 1))) - (q * stake_amount)
+                
+                # Determine risk level
+                if kelly_fraction > 0.1:
+                    risk_level = "High"
+                elif kelly_fraction > 0.05:
+                    risk_level = "Medium"
+                elif kelly_fraction > 0:
+                    risk_level = "Low"
+                else:
+                    risk_level = "No Bet"
+                
+                # Calculate edge
+                implied_prob = 1 / odds if odds > 0 else 0
+                edge = probability - implied_prob
+                
+                # Determine value rating
+                if edge > 0.1:
+                    value_rating = "Excellent"
+                elif edge > 0.05:
+                    value_rating = "Good"
+                elif edge > 0.02:
+                    value_rating = "Fair"
+                else:
+                    value_rating = "Poor"
+                
+                return {
+                    'stake_amount': stake_amount,
+                    'stake_percent': stake_amount / bankroll,
+                    'kelly_fraction': kelly_fraction,
+                    'expected_value': expected_value,
+                    'risk_level': risk_level,
+                    'edge_percent': edge * 100,
+                    'value_rating': value_rating,
+                    'implied_probability': implied_prob,
+                    'true_probability': probability,
+                    'max_stake_limit': max_stake
+                }
         
+        return BuiltInKelly(fraction=0.5)
+    
     def _init_explanation_templates(self):
         """Initialize explanation templates"""
         self.explanation_templates = {
             1: (
-                "High Confidence {prediction}: Kalman optimal estimate shows {total_goals:.2f} total goals "
-                "with strong momentum. Last5: {last5_contribution:.2f}, Last10: {last10_contribution:.2f}. "
+                "High Confidence {prediction}: Both teams average >1.5 goals per game in adjusted "
+                "last 10 AND last 5 metrics. Expected goals: {total_goals:.2f}. "
+                "Kalman fusion: Last5: {last5_contribution:.2f}, Last10: {last10_contribution:.2f}. "
                 "Edge: {edge:.1f}%."
             ),
             2: (
-                "Moderate Confidence {prediction}: Bayesian probability {probability:.1%} with "
-                "Kalman confidence {confidence:.2f}. Expected goals: {total_goals:.2f}. "
+                "High Confidence {prediction}: Strong defense (<1.0 GApg) vs weak attack "
+                "(<1.5 GPG) in both periods. Expected goals: {total_goals:.2f}. "
+                "Defense: {home_defense:.2f} GApg vs Attack: {away_attack:.2f} GPG. "
                 "Edge: {edge:.1f}%."
             ),
             3: (
-                "Low Confidence {prediction}: Statistical edge detected but weak signal. "
-                "Expected goals: {total_goals:.2f}. Kalman variance: {variance:.3f}. "
+                "Moderate Confidence {prediction}: Strong attacking form in last 5 matches (>1.5 GPG). "
+                "Home: {home_last5:.2f} GPG ({home_momentum}). Away: {away_last5:.2f} GPG ({away_momentum}). "
+                "Expected goals: {total_goals:.2f}. Edge: {edge:.1f}%."
+            ),
+            4: (
+                "Moderate Confidence {prediction}: Recent defensive strength vs attacking weakness. "
+                "Home defense (last5): {home_last5_gapg:.2f} GApg. "
+                "Away attack (last5): {away_last5:.2f} GPG. "
+                "Expected goals: {total_goals:.2f}. Edge: {edge:.1f}%."
+            ),
+            5: (
+                "Low Confidence {prediction}: xG-based prediction with slight statistical edge. "
+                "Expected goals: {total_goals:.2f}. xG advantage: {xg_avg:.2f}. "
                 "Edge: {edge:.1f}%."
+            ),
+            'no_bet': (
+                "No Bet: Rule triggered {prediction} but expected goals ({total_goals:.2f}) "
+                "don't support the prediction. Required: {required_condition}. "
+                "Insufficient statistical edge."
             )
         }
     
@@ -174,10 +276,12 @@ class CompletePhantomPredictor:
         # Home team: Fusion of home stats
         home_last10 = home_stats.get('last10_home_gpg', home_stats.get('last10_gpg', 1.5))
         home_last5 = home_stats.get('last5_home_gpg', home_stats.get('last5_gpg', 1.5))
+        home_last5_gapg = home_stats.get('last5_home_gapg', home_stats.get('gapg_last10', 1.5))
         
         # Away team: Fusion of away stats
         away_last10 = away_stats.get('last10_away_gpg', away_stats.get('last10_gpg', 1.5))
         away_last5 = away_stats.get('last5_away_gpg', away_stats.get('last5_gpg', 1.5))
+        away_last5_gapg = away_stats.get('last5_away_gapg', away_stats.get('gapg_last10', 1.5))
         
         # Apply Kalman filter to home stats
         home_posterior, home_var = self.kalman_update(
@@ -239,8 +343,8 @@ class CompletePhantomPredictor:
             'home_last10': home_last10,
             'away_last5': away_last5,
             'away_last10': away_last10,
-            'home_last5_gapg': home_stats.get('last5_home_gapg', home_stats.get('gapg_last10', 1.5)),
-            'away_last5_gapg': away_stats.get('last5_away_gapg', away_stats.get('gapg_last10', 1.5)),
+            'home_last5_gapg': home_last5_gapg,
+            'away_last5_gapg': away_last5_gapg,
             'home_xg': home_xg,
             'away_xg': away_xg,
             'league_context': context,
@@ -250,9 +354,9 @@ class CompletePhantomPredictor:
             'kalman_away_var': away_final_var
         }
     
-    def _apply_five_rules(self, stats: Dict) -> Tuple[str, str, int, float]:
+    def _apply_five_rules_with_validation(self, stats: Dict, expected_goals: float) -> Tuple[str, str, int, float]:
         """
-        Enhanced 5-rule system with Kalman optimal estimates
+        Enhanced 5-rule system with Kalman optimal estimates AND VALIDATION
         """
         # Extract Kalman optimal estimates
         home_attack = stats['home_attack']
@@ -262,18 +366,22 @@ class CompletePhantomPredictor:
         
         # Rule 1: High Confidence Over (Both Kalman estimates > threshold)
         rule1_condition = (
-            home_attack > self.over_threshold and
-            away_attack > self.over_threshold and
+            stats['home_last10'] > self.over_threshold and
+            stats['away_last10'] > self.over_threshold and
             stats['home_last5'] > self.over_threshold and
             stats['away_last5'] > self.over_threshold
         )
         
         if rule1_condition:
-            confidence_boost = 0.05 if (stats['home_momentum'] == "improving" or 
-                                       stats['away_momentum'] == "improving") else 0
-            return "Over 2.5", "High", 1, confidence_boost
+            # VALIDATION: Expected goals must support Over prediction
+            if expected_goals >= self.min_over_goals:
+                confidence_boost = 0.05 if (stats['home_momentum'] == "improving" or 
+                                           stats['away_momentum'] == "improving") else 0
+                return "Over 2.5", "High", 1, confidence_boost
+            else:
+                return "No Bet", "None", 1, 0
         
-        # Rule 2: High Confidence Under (Strong Kalman defense vs weak attack)
+        # Rule 2: High Confidence Under (Strong defense vs weak attack)
         rule2_condition = (
             home_defense < self.under_threshold_defense and
             away_attack < self.under_threshold_attack and
@@ -282,37 +390,50 @@ class CompletePhantomPredictor:
         )
         
         if rule2_condition:
-            confidence_boost = 0.05 if (stats['home_momentum'] == "improving" or 
-                                       stats['away_momentum'] == "declining") else 0
-            return "Under 2.5", "High", 2, confidence_boost
+            # VALIDATION: Expected goals must support Under prediction
+            if expected_goals <= self.max_under_goals:
+                confidence_boost = 0.05 if (stats['home_momentum'] == "improving" or 
+                                           stats['away_momentum'] == "declining") else 0
+                return "Under 2.5", "High", 2, confidence_boost
+            else:
+                return "No Bet", "None", 2, 0
         
-        # Rule 3: Moderate Confidence Over (Kalman estimate > threshold)
+        # Rule 3: Moderate Confidence Over (Last 5 only)
         rule3_condition = (
-            home_attack > self.over_threshold and
-            away_attack > self.over_threshold
+            stats['home_last5'] > self.over_threshold and
+            stats['away_last5'] > self.over_threshold
         )
         
         if rule3_condition:
-            momentum_bonus = 0.03 if (stats['home_momentum'] == "improving" or 
-                                     stats['away_momentum'] == "improving") else 0
-            return "Over 2.5", "Moderate", 3, momentum_bonus
+            # VALIDATION: Expected goals must support Over prediction
+            if expected_goals >= self.min_over_goals:
+                momentum_bonus = 0.03 if (stats['home_momentum'] == "improving" or 
+                                         stats['away_momentum'] == "improving") else 0
+                return "Over 2.5", "Moderate", 3, momentum_bonus
+            else:
+                return "No Bet", "None", 3, 0
         
-        # Rule 4: Moderate Confidence Under (Kalman defense strong)
+        # Rule 4: Moderate Confidence Under (Last 5 only)
         rule4_condition = (
-            home_defense < self.under_threshold_defense and
-            away_attack < self.under_threshold_attack
+            stats['home_last5_gapg'] < self.under_threshold_defense and
+            stats['away_last5'] < self.under_threshold_attack
         )
         
         if rule4_condition:
-            momentum_bonus = 0.03 if (stats['home_momentum'] == "improving" or 
-                                     stats['away_momentum'] == "declining") else 0
-            return "Under 2.5", "Moderate", 4, momentum_bonus
+            # VALIDATION: Expected goals must support Under prediction
+            if expected_goals <= self.max_under_goals:
+                momentum_bonus = 0.03 if (stats['home_momentum'] == "improving" or 
+                                         stats['away_momentum'] == "declining") else 0
+                return "Under 2.5", "Moderate", 4, momentum_bonus
+            else:
+                return "No Bet", "None", 4, 0
         
-        # Rule 5: Bayesian/Kalman edge detection
-        total_goals = home_attack + away_attack
-        if total_goals > 2.8:  # High expected goals
+        # Rule 5: xG-based edge detection
+        xg_advantage = (stats['home_xg'] + stats['away_xg']) / 2
+        
+        if xg_advantage > 1.8 and expected_goals >= 2.5:  # High xG expectation
             return "Over 2.5", "Low", 5, 0
-        elif total_goals < 2.2:  # Low expected goals
+        elif xg_advantage < 1.2 and expected_goals <= 2.5:  # Low xG expectation
             return "Under 2.5", "Low", 5, 0
         
         return "No Bet", "None", 5, 0
@@ -322,7 +443,7 @@ class CompletePhantomPredictor:
         
         context = stats['league_context']
         
-        # Use Kalman optimal estimates
+        # Use Kalman optimal estimates with proper Poisson formula
         lambda_home = (stats['home_attack'] * 
                       (stats['away_defense'] / context['avg_gapg']) * 
                       (1 + context['home_advantage']))
@@ -369,14 +490,22 @@ class CompletePhantomPredictor:
     
     def calculate_kelly_stake(self, probability: float, odds: float, confidence: str, 
                              bankroll: float = None) -> Dict:
-        """Fractional Kelly staking with confidence weighting"""
+        """Calculate stake using integrated Kelly calculator"""
         if bankroll is None:
             bankroll = self.bankroll
         
-        confidence_map = {"High": 0.8, "Moderate": 0.65, "Low": 0.55, "None": 0.0}
-        confidence_value = confidence_map.get(confidence, 0.5)
+        # Map confidence to Kelly fraction adjustment
+        confidence_multipliers = {
+            "High": 1.0,
+            "Moderate": 0.7,
+            "Low": 0.4,
+            "None": 0.0
+        }
         
-        if confidence_value < self.min_confidence:
+        confidence_mult = confidence_multipliers.get(confidence, 0.5)
+        
+        # Check if we should bet
+        if confidence_mult == 0 or probability < self.min_confidence:
             return {
                 'stake_amount': 0.0,
                 'stake_percent': 0.0,
@@ -388,82 +517,40 @@ class CompletePhantomPredictor:
                 'implied_probability': 1 / odds if odds > 0 else 0.0
             }
         
-        implied_prob = 1 / odds if odds > 0 else 0.0
-        edge = probability - implied_prob
+        # Calculate stake using Kelly calculator
+        staking_result = self.kelly.calculate_stake(
+            probability=probability,
+            odds=odds,
+            bankroll=bankroll,
+            max_percent=self.max_stake_pct
+        )
         
-        if edge <= 0:
-            return {
-                'stake_amount': 0.0,
-                'stake_percent': 0.0,
-                'kelly_fraction': 0.0,
-                'expected_value': 0.0,
-                'risk_level': 'No Value',
-                'edge_percent': edge * 100,
-                'value_rating': 'Poor',
-                'implied_probability': implied_prob
-            }
+        # Add edge calculation if not already present
+        if 'edge_percent' not in staking_result:
+            implied_prob = 1 / odds if odds > 0 else 0.0
+            edge = probability - implied_prob
+            staking_result['edge_percent'] = edge * 100
+            
+            # Determine value rating
+            if edge > 0.1:
+                staking_result['value_rating'] = "Excellent"
+            elif edge > 0.05:
+                staking_result['value_rating'] = "Good"
+            elif edge > 0.02:
+                staking_result['value_rating'] = "Fair"
+            else:
+                staking_result['value_rating'] = "Poor"
+            
+            staking_result['implied_probability'] = implied_prob
+            staking_result['true_probability'] = probability
         
-        # Kelly formula
-        b = odds - 1
-        p = probability
-        q = 1 - p
-        
-        if b <= 0:
-            kelly_fraction = 0.0
-        else:
-            kelly_fraction = (b * p - q) / b
-        
-        # Apply fractional Kelly and confidence weighting
-        fractional_kelly = max(0, kelly_fraction) * self.kelly_fraction * confidence_value
-        
-        # Calculate stake
-        stake_amount = fractional_kelly * bankroll
-        
-        # Cap at reasonable levels
-        max_stake = bankroll * self.max_stake_pct
-        stake_amount = min(stake_amount, max_stake)
-        
-        # Calculate expected value
-        expected_value = (probability * (stake_amount * (odds - 1))) - ((1 - probability) * stake_amount)
-        
-        # Determine risk level
-        if fractional_kelly > 0.1:
-            risk_level = "High"
-        elif fractional_kelly > 0.05:
-            risk_level = "Medium"
-        elif fractional_kelly > 0:
-            risk_level = "Low"
-        else:
-            risk_level = "No Bet"
-        
-        # Determine value rating
-        if edge > 0.1:
-            value_rating = "Excellent"
-        elif edge > 0.05:
-            value_rating = "Good"
-        elif edge > 0.02:
-            value_rating = "Fair"
-        else:
-            value_rating = "Poor"
-        
-        return {
-            'stake_amount': stake_amount,
-            'stake_percent': stake_amount / bankroll,
-            'kelly_fraction': fractional_kelly,
-            'expected_value': expected_value,
-            'risk_level': risk_level,
-            'edge_percent': edge * 100,
-            'value_rating': value_rating,
-            'implied_probability': implied_prob
-        }
+        return staking_result
     
-    # NEW METHOD: This is what your app is calling
     def predict_with_staking(self, home_stats: dict, away_stats: dict,
                            market_odds: dict, league: str = "default", 
                            bankroll: float = None) -> Dict:
         """
-        Prediction method that matches what your app expects
-        This is the method your app is calling
+        Complete prediction pipeline with validation
         """
         if bankroll is None:
             bankroll = self.bankroll
@@ -475,11 +562,45 @@ class CompletePhantomPredictor:
         # Prepare stats with Kalman optimal fusion
         stats = self._prepare_stats_for_prediction(home_stats, away_stats, league)
         
-        # Apply rules
-        prediction, confidence, rule_number, confidence_boost = self._apply_five_rules(stats)
-        
-        # Calculate Poisson probabilities
+        # Calculate Poisson probabilities FIRST
         expected_goals, prob_over, prob_under, poisson_details = self._calculate_poisson_probabilities(stats)
+        
+        # Apply rules WITH VALIDATION against expected goals
+        prediction, confidence, rule_number, confidence_boost = self._apply_five_rules_with_validation(
+            stats, expected_goals
+        )
+        
+        # If No Bet, return early
+        if prediction == "No Bet":
+            explanation = self._generate_no_bet_explanation(
+                stats, expected_goals, rule_number, prediction
+            )
+            return {
+                'prediction': 'NO BET',
+                'confidence': 'None',
+                'probability': max(prob_over, prob_under),
+                'expected_goals': expected_goals,
+                'rule_number': rule_number,
+                'explanation': explanation,
+                'staking_info': {
+                    'stake_amount': 0.0,
+                    'stake_percent': 0.0,
+                    'edge_percent': 0.0,
+                    'expected_value': 0.0,
+                    'risk_level': 'No Bet',
+                    'value_rating': 'None'
+                },
+                'market_odds': over_odds if prob_over > prob_under else under_odds,
+                'poisson_details': poisson_details,
+                'stats_analysis': {
+                    'home_attack': stats['home_attack'],
+                    'home_defense': stats['home_defense'],
+                    'away_attack': stats['away_attack'],
+                    'away_defense': stats['away_defense'],
+                    'home_momentum': stats['home_momentum'],
+                    'away_momentum': stats['away_momentum']
+                }
+            }
         
         # Calculate Bayesian probabilities
         bayesian_over, bayesian_under = self._bayesian_probability(expected_goals)
@@ -492,12 +613,9 @@ class CompletePhantomPredictor:
         if prediction == "Over 2.5":
             base_probability = combined_over
             market_odd = over_odds
-        elif prediction == "Under 2.5":
+        else:  # Under 2.5
             base_probability = combined_under
             market_odd = under_odds
-        else:
-            base_probability = max(combined_over, combined_under)
-            market_odd = 2.0
         
         # Apply confidence boost
         final_probability = min(0.95, base_probability + confidence_boost)
@@ -517,7 +635,7 @@ class CompletePhantomPredictor:
             expected_goals
         )
         
-        # Return complete prediction matching your app's expected format
+        # Return complete prediction
         return {
             'prediction': prediction,
             'confidence': confidence,
@@ -526,7 +644,7 @@ class CompletePhantomPredictor:
             'rule_number': rule_number,
             'explanation': explanation,
             'staking_info': staking_info,
-            'market_odds': market_odd,  # Single odds value
+            'market_odds': market_odd,
             'poisson_details': poisson_details,
             'stats_analysis': {
                 'home_attack': stats['home_attack'],
@@ -534,33 +652,15 @@ class CompletePhantomPredictor:
                 'away_attack': stats['away_attack'],
                 'away_defense': stats['away_defense'],
                 'home_momentum': stats['home_momentum'],
-                'away_momentum': stats['away_momentum'],
-                'kalman_home': stats['kalman_home'],
-                'kalman_away': stats['kalman_away']
+                'away_momentum': stats['away_momentum']
             }
         }
-    
-    # Keep the original predict_match method for compatibility
-    def predict_match(self, home_stats: dict, away_stats: dict,
-                     over_odds: float, under_odds: float, 
-                     league: str = "default", bankroll: float = None) -> Dict:
-        """Alternative method that accepts separate odds"""
-        market_odds = {'over_25': over_odds, 'under_25': under_odds}
-        return self.predict_with_staking(home_stats, away_stats, market_odds, league, bankroll)
     
     def _generate_explanation(self, prediction: str, confidence: str, rule_number: int, 
                             stats: Dict, probability: float, edge: float,
                             expected_goals: float) -> str:
         """Generate detailed explanation for the prediction"""
         
-        if rule_number == 5 and prediction == "No Bet":
-            return (
-                f"No clear statistical edge. Kalman optimal estimates: "
-                f"Home: {stats['kalman_home']:.2f}, Away: {stats['kalman_away']:.2f}. "
-                f"Expected goals: {expected_goals:.2f}. Bayesian probability inconclusive."
-            )
-        
-        # Prepare template variables
         template_vars = {
             'prediction': prediction,
             'total_goals': expected_goals,
@@ -569,19 +669,41 @@ class CompletePhantomPredictor:
             'edge': edge,
             'probability': probability,
             'confidence': 1.0 / ((stats.get('kalman_home_var', 0.1) + stats.get('kalman_away_var', 0.1)) / 2 + 0.01),
-            'variance': (stats.get('kalman_home_var', 0.1) + stats.get('kalman_away_var', 0.1)) / 2
+            'variance': (stats.get('kalman_home_var', 0.1) + stats.get('kalman_away_var', 0.1)) / 2,
+            'home_defense': stats['home_defense'],
+            'away_attack': stats['away_attack'],
+            'home_last5': stats['home_last5'],
+            'away_last5': stats['away_last5'],
+            'home_momentum': stats['home_momentum'],
+            'away_momentum': stats['away_momentum'],
+            'home_last5_gapg': stats['home_last5_gapg'],
+            'xg_avg': (stats['home_xg'] + stats['away_xg']) / 2
         }
         
-        # Select appropriate template based on confidence
-        if confidence == "High":
-            template_key = 1
-        elif confidence == "Moderate":
-            template_key = 2
-        else:
-            template_key = 3
-        
-        template = self.explanation_templates.get(template_key)
+        template = self.explanation_templates.get(rule_number)
         if template:
             return template.format(**template_vars)
         
-        return f"{confidence} confidence {prediction} based on Kalman optimal hybrid analysis."
+        return f"{confidence} confidence {prediction} based on comprehensive statistical analysis."
+    
+    def _generate_no_bet_explanation(self, stats: Dict, expected_goals: float, 
+                                   rule_number: int, predicted_rule: str) -> str:
+        """Explanation for no bet scenarios"""
+        
+        if rule_number in [1, 2, 3, 4]:  # Rule triggered but validation failed
+            if predicted_rule == "Over 2.5":
+                required = f">={self.min_over_goals} goals"
+            else:
+                required = f"<={self.max_under_goals} goals"
+            
+            return self.explanation_templates['no_bet'].format(
+                prediction=predicted_rule,
+                total_goals=expected_goals,
+                required_condition=required
+            )
+        
+        return (
+            f"No clear statistical edge. Kalman optimal estimates: "
+            f"Home: {stats['kalman_home']:.2f}, Away: {stats['kalman_away']:.2f}. "
+            f"Expected goals: {expected_goals:.2f}. Bayesian probability inconclusive."
+        )
