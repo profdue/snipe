@@ -238,6 +238,8 @@ class CompletePhantomPredictor:
             'away_last10': away_last10,
             'home_xg': home_stats.avg_xg_for,
             'away_xg': away_stats.avg_xg_for,
+            'home_last5_gapg': home_stats.last5_home_gapg,  # Added for compatibility
+            'away_last5_gapg': away_stats.last5_away_gapg,  # Added for compatibility
             'league_context': context,
             'kalman_home': home_final,
             'kalman_away': away_final,
@@ -272,8 +274,8 @@ class CompletePhantomPredictor:
         rule2_condition = (
             home_defense < self.under_threshold_defense and
             away_attack < self.under_threshold_attack and
-            stats['home_last5_gapg'] < self.under_threshold_defense and
-            stats['away_last5'] < self.under_threshold_attack
+            stats.get('home_last5_gapg', home_defense) < self.under_threshold_defense and
+            stats.get('away_last5_gapg', away_attack) < self.under_threshold_attack
         )
         
         if rule2_condition:
@@ -450,6 +452,18 @@ class CompletePhantomPredictor:
             'implied_probability': implied_prob
         }
     
+    # ==================== COMPATIBILITY METHODS ====================
+    
+    def predict_with_staking(self, home_stats: TeamStats, away_stats: TeamStats, 
+                           over_odds: float, under_odds: float, 
+                           league: str = "default", bankroll: float = None) -> Dict:
+        """
+        Compatibility method for your Streamlit app
+        This is the method your app is calling
+        """
+        # Call the main predict_match method
+        return self.predict_match(home_stats, away_stats, over_odds, under_odds, league, bankroll)
+    
     def predict_match(self, home_stats: TeamStats, away_stats: TeamStats, 
                      over_odds: float, under_odds: float, 
                      league: str = "default", bankroll: float = None) -> Dict:
@@ -558,7 +572,7 @@ class CompletePhantomPredictor:
             'last10_contribution': (stats['home_last10'] + stats['away_last10']) / 2,
             'edge': edge,
             'probability': probability,
-            'confidence': stats.get('kalman_home_var', 0.1) + stats.get('kalman_away_var', 0.1),
+            'confidence': 1.0 / (stats.get('kalman_home_var', 0.1) + stats.get('kalman_away_var', 0.1) + 0.01),
             'variance': (stats.get('kalman_home_var', 0.1) + stats.get('kalman_away_var', 0.1)) / 2
         }
         
@@ -581,7 +595,7 @@ class CompletePhantomPredictor:
 # ============================================================================
 
 def test_predictor():
-    """Test the predictor"""
+    """Test the predictor with both methods"""
     
     # Create sample teams
     team_a = TeamStats(
@@ -621,8 +635,11 @@ def test_predictor():
     # Initialize predictor
     predictor = CompletePhantomPredictor(bankroll=1000.0)
     
-    # Make prediction
-    result = predictor.predict_match(
+    print("Testing predict_with_staking() method...")
+    print("=" * 60)
+    
+    # Test the method your app is calling
+    result = predictor.predict_with_staking(
         home_stats=team_a,
         away_stats=team_b,
         over_odds=1.85,
@@ -631,9 +648,6 @@ def test_predictor():
     )
     
     # Display results
-    print("=" * 60)
-    print("COMPLETE PHANTOM PREDICTOR v5.0")
-    print("=" * 60)
     print(f"Match: {team_a.team_name} vs {team_b.team_name}")
     print(f"Prediction: {result['prediction']}")
     print(f"Confidence: {result['confidence']}")
@@ -647,6 +661,21 @@ def test_predictor():
         print(f"  Edge: {result['staking_info']['edge_percent']:.1f}%")
         print(f"  Expected Value: ${result['staking_info']['expected_value']:.2f}")
         print(f"  Risk Level: {result['staking_info']['risk_level']}")
+    
+    # Also test the predict_match method
+    print("\n" + "=" * 60)
+    print("Testing predict_match() method...")
+    print("=" * 60)
+    
+    result2 = predictor.predict_match(
+        home_stats=team_a,
+        away_stats=team_b,
+        over_odds=1.85,
+        under_odds=1.95,
+        league='premier_league'
+    )
+    
+    print(f"Both methods return same: {result['prediction'] == result2['prediction']}")
 
 if __name__ == "__main__":
     test_predictor()
