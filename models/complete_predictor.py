@@ -1,6 +1,39 @@
 import numpy as np
 import math
-from typing import Dict, Tuple, Optional
+import pandas as pd
+from typing import Dict, Tuple, Optional, List
+from dataclasses import dataclass
+
+@dataclass
+class TeamStats:
+    """Container for team statistics from CSV"""
+    team_name: str
+    matches_played: int
+    home_wins: int
+    home_draws: int
+    home_losses: int
+    home_goals_for: float
+    home_goals_against: float
+    away_wins: int
+    away_draws: int
+    away_losses: int
+    away_goals_for: float
+    away_goals_against: float
+    home_xg: Optional[float]
+    away_xg: Optional[float]
+    avg_xg_for: float
+    avg_xg_against: float
+    form_last_5: str
+    attack_strength: float
+    defense_strength: float
+    last5_home_gpg: float
+    last5_home_gapg: float
+    last5_away_gpg: float
+    last5_away_gapg: float
+    last10_home_gpg: float
+    last10_home_gapg: float
+    last10_away_gpg: float
+    last10_away_gapg: float
 
 class CompletePhantomPredictor:
     """
@@ -14,16 +47,18 @@ class CompletePhantomPredictor:
     - Edge calculation
     """
     
-    def __init__(self, bankroll: float = 1000.0, min_confidence: float = 0.55):
+    def __init__(self, bankroll: float = 1000.0, min_confidence: float = 0.50):
         self.bankroll = bankroll
         self.min_confidence = min_confidence
         
         # League context (can be overridden per league)
         self.league_context = {
-            'premier_league': {'avg_gpg': 1.47, 'avg_gapg': 1.27, 'home_advantage': 0.25},
-            'la_liga': {'avg_gpg': 1.32, 'avg_gapg': 1.18, 'home_advantage': 0.28},
-            'bundesliga': {'avg_gpg': 1.58, 'avg_gapg': 1.42, 'home_advantage': 0.22},
-            'default': {'avg_gpg': 1.5, 'avg_gapg': 1.3, 'home_advantage': 0.25}
+            'premier_league': {'avg_gpg': 2.8, 'avg_gapg': 2.8, 'home_advantage': 0.15},
+            'la_liga': {'avg_gpg': 2.6, 'avg_gapg': 2.6, 'home_advantage': 0.18},
+            'bundesliga': {'avg_gpg': 3.1, 'avg_gapg': 3.1, 'home_advantage': 0.12},
+            'serie_a': {'avg_gpg': 2.5, 'avg_gapg': 2.5, 'home_advantage': 0.20},
+            'ligue_1': {'avg_gpg': 2.7, 'avg_gapg': 2.7, 'home_advantage': 0.16},
+            'default': {'avg_gpg': 2.7, 'avg_gapg': 2.7, 'home_advantage': 0.16}
         }
         
         # Bayesian parameters
@@ -31,9 +66,9 @@ class CompletePhantomPredictor:
         self.min_games_for_stability = 8
         
         # Prediction thresholds (adjustable based on league)
-        self.over_threshold = 1.5
-        self.under_threshold_defense = 1.0
-        self.under_threshold_attack = 1.5
+        self.over_threshold = 1.5  # Goals per game
+        self.under_threshold_defense = 1.0  # Goals against per game
+        self.under_threshold_attack = 1.5  # Goals per game
         
         # xG weight (60% actual, 40% xG)
         self.xg_weight = 0.4
@@ -76,7 +111,7 @@ class CompletePhantomPredictor:
                 "Poisson probability: {probability:.1%}. Edge: {edge:.1f}%."
             )
         }
-        
+    
     def poisson_pmf(self, k: int, lambd: float) -> float:
         """Calculate Poisson probability mass function"""
         return (lambd ** k * math.exp(-lambd)) / math.factorial(k)
@@ -102,22 +137,39 @@ class CompletePhantomPredictor:
             return "declining", 0.9  # Reduce by 10%
         return "stable", 1.0
     
-    def _extract_and_process_stats(self, home_stats: Dict, away_stats: Dict, league: str = "default") -> Dict:
-        """Extract and process all relevant statistics with Bayesian adjustments"""
+    def _prepare_stats_for_prediction(self, home_stats: TeamStats, away_stats: TeamStats, league: str = "default") -> Dict:
+        """Prepare statistics for prediction from TeamStats objects"""
         context = self.league_context.get(league, self.league_context['default'])
         
-        stats = {}
-        
-        # Extract basic stats
-        stats['home_last5_gpg'] = home_stats.get('last5_home_gpg', home_stats.get('home_gpg', 0))
-        stats['home_last5_gapg'] = home_stats.get('last5_home_gapg', home_stats.get('home_gapg', 0))
-        stats['home_last10_gpg'] = home_stats.get('last10_home_gpg', stats['home_last5_gpg'])
-        stats['home_last10_gapg'] = home_stats.get('last10_home_gapg', stats['home_last5_gapg'])
-        
-        stats['away_last5_gpg'] = away_stats.get('last5_away_gpg', away_stats.get('away_gpg', 0))
-        stats['away_last5_gapg'] = away_stats.get('last5_away_gapg', away_stats.get('away_gpg', 0))
-        stats['away_last10_gpg'] = away_stats.get('last10_away_gpg', stats['away_last5_gpg'])
-        stats['away_last10_gapg'] = away_stats.get('last10_away_gapg', stats['away_last5_gapg'])
+        # Extract and prepare stats in the format expected by the predictor
+        stats = {
+            # Basic stats
+            'home_last5_gpg': home_stats.last5_home_gpg,
+            'home_last5_gapg': home_stats.last5_home_gapg,
+            'home_last10_gpg': home_stats.last10_home_gpg,
+            'home_last10_gapg': home_stats.last10_home_gapg,
+            
+            'away_last5_gpg': away_stats.last5_away_gpg,
+            'away_last5_gapg': away_stats.last5_away_gapg,
+            'away_last10_gpg': away_stats.last10_away_gpg,
+            'away_last10_gapg': away_stats.last10_away_gapg,
+            
+            # xG stats
+            'home_xg_for': home_stats.avg_xg_for,
+            'home_xg_against': home_stats.avg_xg_against,
+            'away_xg_for': away_stats.avg_xg_for,
+            'away_xg_against': away_stats.avg_xg_against,
+            
+            # Form
+            'home_form': home_stats.form_last_5,
+            'away_form': away_stats.form_last_5,
+            
+            # Attack/defense strength
+            'home_attack_strength': home_stats.attack_strength,
+            'home_defense_strength': home_stats.defense_strength,
+            'away_attack_strength': away_stats.attack_strength,
+            'away_defense_strength': away_stats.defense_strength,
+        }
         
         # Calculate momentum
         stats['home_momentum'], stats['home_momentum_mult'] = self._calculate_form_momentum(
@@ -151,16 +203,11 @@ class CompletePhantomPredictor:
                                                                   if stats['away_momentum'] == "improving" 
                                                                   else stats['away_momentum_mult'])
         
-        # xG hybrid metrics
-        home_gpg_last10 = home_stats.get('gpg_last10', 0)
-        away_gpg_last10 = away_stats.get('gpg_last10', 0)
-        home_gapg_last10 = home_stats.get('gapg_last10', 0)
-        away_gapg_last10 = away_stats.get('gapg_last10', 0)
-        
-        stats['home_hybrid_gpg'] = (1 - self.xg_weight) * home_gpg_last10 + self.xg_weight * home_stats.get('avg_xg_for', home_gpg_last10)
-        stats['home_hybrid_gapg'] = (1 - self.xg_weight) * home_gapg_last10 + self.xg_weight * home_stats.get('avg_xg_against', home_gapg_last10)
-        stats['away_hybrid_gpg'] = (1 - self.xg_weight) * away_gpg_last10 + self.xg_weight * away_stats.get('avg_xg_for', away_gpg_last10)
-        stats['away_hybrid_gapg'] = (1 - self.xg_weight) * away_gapg_last10 + self.xg_weight * away_stats.get('avg_xg_against', away_gapg_last10)
+        # xG hybrid metrics (60% actual goals, 40% xG)
+        stats['home_hybrid_gpg'] = (0.6 * stats['home_last10_gpg_adj'] + 0.4 * stats['home_xg_for'])
+        stats['home_hybrid_gapg'] = (0.6 * stats['home_last10_gapg_adj'] + 0.4 * stats['home_xg_against'])
+        stats['away_hybrid_gpg'] = (0.6 * stats['away_last10_gpg_adj'] + 0.4 * stats['away_xg_for'])
+        stats['away_hybrid_gapg'] = (0.6 * stats['away_last10_gapg_adj'] + 0.4 * stats['away_xg_against'])
         
         # Combined final stats (40% last10_adj, 40% last5_adj, 20% hybrid)
         stats['home_attack_final'] = (0.4 * stats['home_last10_gpg_adj'] + 
@@ -277,7 +324,7 @@ class CompletePhantomPredictor:
     
     def calculate_kelly_stake(self, probability: float, odds: float, confidence: str, 
                              bankroll: float = None) -> Dict:
-        """Fractional Kelly staking with confidence weighting - FIXED CONSISTENT SCHEMA"""
+        """Fractional Kelly staking with confidence weighting"""
         if bankroll is None:
             bankroll = self.bankroll
         
@@ -366,27 +413,28 @@ class CompletePhantomPredictor:
             'implied_probability': implied_prob
         }
     
-    def predict_with_staking(self, home_stats: Dict, away_stats: Dict, 
-                            market_odds: Dict, league: str = "default", 
-                            bankroll: float = None) -> Dict:
+    def predict_match(self, home_stats: TeamStats, away_stats: TeamStats, 
+                     over_odds: float, under_odds: float, 
+                     league: str = "default", bankroll: float = None) -> Dict:
         """
-        Complete prediction with staking recommendations
+        Complete prediction for a single match
         
         Args:
             home_stats: Home team statistics
             away_stats: Away team statistics
-            market_odds: Dictionary with 'over_25' and/or 'under_25' odds
+            over_odds: Market odds for Over 2.5
+            under_odds: Market odds for Under 2.5
             league: League name for context
             bankroll: Current bankroll (overrides instance bankroll)
         
         Returns:
-            Complete prediction dictionary with staking info
+            Complete prediction dictionary
         """
         if bankroll is None:
             bankroll = self.bankroll
         
-        # Process stats
-        stats = self._extract_and_process_stats(home_stats, away_stats, league)
+        # Prepare stats
+        stats = self._prepare_stats_for_prediction(home_stats, away_stats, league)
         
         # Apply rules
         prediction, confidence, rule_number, confidence_boost = self._apply_five_rules(stats)
@@ -397,21 +445,16 @@ class CompletePhantomPredictor:
         # Determine final probability
         if prediction == "Over 2.5":
             base_probability = prob_over
+            market_odd = over_odds
         elif prediction == "Under 2.5":
             base_probability = prob_under
+            market_odd = under_odds
         else:
             base_probability = 0.5
+            market_odd = 2.0
         
         # Apply confidence boost
         final_probability = min(0.95, base_probability + confidence_boost)
-        
-        # Get appropriate market odds
-        if prediction == "Over 2.5":
-            market_odd = market_odds.get('over_25', 1.85)
-        elif prediction == "Under 2.5":
-            market_odd = market_odds.get('under_25', 1.95)
-        else:
-            market_odd = 2.0  # Default if no bet
         
         # Calculate stake
         staking_info = self.calculate_kelly_stake(
@@ -421,7 +464,7 @@ class CompletePhantomPredictor:
             bankroll=bankroll
         )
         
-        # Generate detailed explanation
+        # Generate explanation
         explanation = self._generate_explanation(
             prediction, confidence, rule_number, stats, 
             final_probability, staking_info['edge_percent']
@@ -451,7 +494,7 @@ class CompletePhantomPredictor:
     
     def _generate_explanation(self, prediction: str, confidence: str, rule_number: int, 
                             stats: Dict, probability: float, edge: float) -> str:
-        """Generate detailed explanation for the prediction using templates"""
+        """Generate detailed explanation for the prediction"""
         
         if rule_number == 5 and prediction == "No Bet":
             return (
@@ -485,60 +528,123 @@ class CompletePhantomPredictor:
             return template.format(**template_vars)
         
         return f"{confidence} confidence {prediction} based on comprehensive statistical analysis."
+
+# ============================================================================
+# DATA LOADER AND PROCESSOR
+# ============================================================================
+
+class FootballDataLoader:
+    """Loads and processes football data from CSV files"""
     
-    def batch_predict(self, matches: list, market_odds_list: list, league: str = "default") -> list:
-        """Predict multiple matches at once"""
-        predictions = []
+    @staticmethod
+    def load_teams_from_csv(csv_path: str) -> Dict[str, TeamStats]:
+        """Load team statistics from CSV file"""
+        df = pd.read_csv(csv_path)
+        teams = {}
         
-        for i, match in enumerate(matches):
-            home_stats, away_stats = match
-            market_odds = market_odds_list[i] if i < len(market_odds_list) else {'over_25': 1.85, 'under_25': 1.95}
-            
-            prediction = self.predict_with_staking(
-                home_stats, away_stats, market_odds, league
+        for _, row in df.iterrows():
+            stats = TeamStats(
+                team_name=row['team_name'],
+                matches_played=int(row['matches_played']),
+                home_wins=int(row['home_wins']),
+                home_draws=int(row['home_draws']),
+                home_losses=int(row['home_losses']),
+                home_goals_for=float(row['home_goals_for']),
+                home_goals_against=float(row['home_goals_against']),
+                away_wins=int(row['away_wins']),
+                away_draws=int(row['away_draws']),
+                away_losses=int(row['away_losses']),
+                away_goals_for=float(row['away_goals_for']),
+                away_goals_against=float(row['away_goals_against']),
+                home_xg=float(row['home_xg']) if pd.notna(row.get('home_xg', np.nan)) else None,
+                away_xg=float(row['away_xg']) if pd.notna(row.get('away_xg', np.nan)) else None,
+                avg_xg_for=float(row['avg_xg_for']),
+                avg_xg_against=float(row['avg_xg_against']),
+                form_last_5=row['form_last_5'],
+                attack_strength=float(row['attack_strength']),
+                defense_strength=float(row['defense_strength']),
+                last5_home_gpg=float(row['last5_home_gpg']),
+                last5_home_gapg=float(row['last5_home_gapg']),
+                last5_away_gpg=float(row['last5_away_gpg']),
+                last5_away_gapg=float(row['last5_away_gapg']),
+                last10_home_gpg=float(row['last10_home_gpg']),
+                last10_home_gapg=float(row['last10_home_gapg']),
+                last10_away_gpg=float(row['last10_away_gpg']),
+                last10_away_gapg=float(row['last10_away_gapg'])
             )
-            predictions.append(prediction)
+            teams[row['team_name']] = stats
         
-        return predictions
+        return teams
+
+# ============================================================================
+# MAIN EXECUTION
+# ============================================================================
+
+def main():
+    """Example usage"""
+    # Initialize predictor
+    predictor = CompletePhantomPredictor(bankroll=1000.0, min_confidence=0.50)
     
-    def analyze_bankroll_growth(self, predictions: list, initial_bankroll: float = 1000.0) -> Dict:
-        """Simulate bankroll growth based on predictions"""
-        bankroll = initial_bankroll
-        bankroll_history = [bankroll]
-        bet_history = []
-        
-        for pred in predictions:
-            if pred['prediction'] != "No Bet" and pred['staking_info']['stake_amount'] > 0:
-                stake = pred['staking_info']['stake_amount']
-                odds = pred['market_odds']
-                
-                # Simulate outcome (for testing, you'd use actual results)
-                import random
-                if random.random() < pred['probability']:
-                    # Win
-                    profit = stake * (odds - 1)
-                    bankroll += profit
-                    outcome = "WIN"
-                else:
-                    # Lose
-                    bankroll -= stake
-                    outcome = "LOSE"
-                
-                bet_history.append({
-                    'prediction': pred['prediction'],
-                    'stake': stake,
-                    'odds': odds,
-                    'probability': pred['probability'],
-                    'outcome': outcome,
-                    'profit': stake * (odds - 1) if outcome == "WIN" else -stake
-                })
-                bankroll_history.append(bankroll)
-        
-        return {
-            'final_bankroll': bankroll,
-            'total_bets': len(bet_history),
-            'total_profit': bankroll - initial_bankroll,
-            'roi': ((bankroll - initial_bankroll) / initial_bankroll) * 100,
-            'bankroll_history': bankroll_history,
-            'bet_history': bet_history
-        }
+    # Example: Load data
+    # data_loader = FootballDataLoader()
+    # premier_league_teams = data_loader.load_teams_from_csv("premier_league_teams.csv")
+    
+    # Example stats (simulated)
+    bournemouth_stats = TeamStats(
+        team_name="Bournemouth",
+        matches_played=14,
+        home_wins=4, home_draws=2, home_losses=1,
+        home_goals_for=10, home_goals_against=5,
+        away_wins=1, away_draws=2, away_losses=4,
+        away_goals_for=11, away_goals_against=19,
+        home_xg=1.55, away_xg=None,
+        avg_xg_for=1.53, avg_xg_against=1.32,
+        form_last_5="WDDLW",
+        attack_strength=1.15, defense_strength=1.35,
+        last5_home_gpg=1.4, last5_home_gapg=0.8,
+        last5_away_gpg=1.6, last5_away_gapg=3.0,
+        last10_home_gpg=1.43, last10_home_gapg=0.71,
+        last10_away_gpg=1.57, last10_away_gapg=2.71
+    )
+    
+    everton_stats = TeamStats(
+        team_name="Everton",
+        matches_played=14,
+        home_wins=3, home_draws=2, home_losses=2,
+        home_goals_for=8, home_goals_against=9,
+        away_wins=3, away_draws=1, away_losses=3,
+        away_goals_for=7, away_goals_against=8,
+        home_xg=1.70, away_xg=0.64,
+        avg_xg_for=1.29, avg_xg_against=1.52,
+        form_last_5="WDLDL",
+        attack_strength=1.15, defense_strength=1.00,
+        last5_home_gpg=1.2, last5_home_gapg=1.8,
+        last5_away_gpg=0.8, last5_away_gapg=1.0,
+        last10_home_gpg=1.14, last10_home_gapg=1.29,
+        last10_away_gpg=1.0, last10_away_gapg=1.14
+    )
+    
+    # Make prediction
+    prediction = predictor.predict_match(
+        home_stats=bournemouth_stats,
+        away_stats=everton_stats,
+        over_odds=1.85,
+        under_odds=1.95,
+        league="premier_league",
+        bankroll=1000.0
+    )
+    
+    # Print results
+    print(f"Prediction: {prediction['prediction']}")
+    print(f"Confidence: {prediction['confidence']}")
+    print(f"Probability: {prediction['probability']:.1%}")
+    print(f"Expected Goals: {prediction['expected_goals']:.2f}")
+    print(f"\nExplanation: {prediction['explanation']}")
+    print(f"\nStaking Info:")
+    print(f"  Stake: ${prediction['staking_info']['stake_amount']:.2f}")
+    print(f"  Edge: {prediction['staking_info']['edge_percent']:.1f}%")
+    print(f"  Expected Value: ${prediction['staking_info']['expected_value']:.2f}")
+    print(f"  Risk Level: {prediction['staking_info']['risk_level']}")
+
+if __name__ == "__main__":
+    main()
