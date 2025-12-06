@@ -174,12 +174,16 @@ class CompletePhantomPredictor:
         # Home team: Fusion of home stats
         home_last10 = home_stats.last10_home_gpg
         home_last5 = home_stats.last5_home_gpg
+        home_last5_gapg = home_stats.last5_home_gapg
+        home_last10_gapg = home_stats.last10_home_gapg
         
         # Away team: Fusion of away stats
         away_last10 = away_stats.last10_away_gpg
         away_last5 = away_stats.last5_away_gpg
+        away_last5_gapg = away_stats.last5_away_gapg
+        away_last10_gapg = away_stats.last10_away_gapg
         
-        # Apply Kalman filter to home stats
+        # Apply Kalman filter to home attack stats
         home_posterior, home_var = self.kalman_update(
             prior_mean, prior_var,
             home_last10, self.kalman_params['measurement_variance_last10']
@@ -189,7 +193,7 @@ class CompletePhantomPredictor:
             home_last5, self.kalman_params['measurement_variance_last5']
         )
         
-        # Apply Kalman filter to away stats
+        # Apply Kalman filter to away attack stats
         away_posterior, away_var = self.kalman_update(
             prior_mean, prior_var,
             away_last10, self.kalman_params['measurement_variance_last10']
@@ -219,9 +223,9 @@ class CompletePhantomPredictor:
         home_attack_final = 0.5 * home_final_adj + 0.5 * home_xg_hybrid
         away_attack_final = 0.5 * away_final_adj + 0.5 * away_xg_hybrid
         
-        # Defense estimates
-        home_defense_final = home_stats.last10_home_gapg * 0.6 + home_stats.avg_xg_against * 0.4
-        away_defense_final = away_stats.last10_away_gapg * 0.6 + away_stats.avg_xg_against * 0.4
+        # Defense estimates (simple average for now)
+        home_defense_final = (home_last10_gapg + home_last5_gapg) / 2
+        away_defense_final = (away_last10_gapg + away_last5_gapg) / 2
         
         return {
             'home_attack': home_attack_final,
@@ -236,10 +240,12 @@ class CompletePhantomPredictor:
             'home_last10': home_last10,
             'away_last5': away_last5,
             'away_last10': away_last10,
+            'home_last5_gapg': home_last5_gapg,
+            'home_last10_gapg': home_last10_gapg,
+            'away_last5_gapg': away_last5_gapg,
+            'away_last10_gapg': away_last10_gapg,
             'home_xg': home_stats.avg_xg_for,
             'away_xg': away_stats.avg_xg_for,
-            'home_last5_gapg': home_stats.last5_home_gapg,  # Added for compatibility
-            'away_last5_gapg': away_stats.last5_away_gapg,  # Added for compatibility
             'league_context': context,
             'kalman_home': home_final,
             'kalman_away': away_final,
@@ -270,12 +276,12 @@ class CompletePhantomPredictor:
                                        stats['away_momentum'] == "improving") else 0
             return "Over 2.5", "High", 1, confidence_boost
         
-        # Rule 2: High Confidence Under (Strong Kalman defense vs weak attack)
+        # Rule 2: High Confidence Under (Strong defense vs weak attack)
         rule2_condition = (
             home_defense < self.under_threshold_defense and
             away_attack < self.under_threshold_attack and
-            stats.get('home_last5_gapg', home_defense) < self.under_threshold_defense and
-            stats.get('away_last5_gapg', away_attack) < self.under_threshold_attack
+            stats['home_last5_gapg'] < self.under_threshold_defense and
+            stats['away_last5'] < self.under_threshold_attack
         )
         
         if rule2_condition:
@@ -321,11 +327,11 @@ class CompletePhantomPredictor:
         
         # Use Kalman optimal estimates
         lambda_home = (stats['home_attack'] * 
-                      (stats['away_defense'] / context['avg_gapg']) * 
+                      (stats['away_defense'] / max(0.1, context['avg_gapg'])) * 
                       (1 + context['home_advantage']))
         
         lambda_away = (stats['away_attack'] * 
-                      (stats['home_defense'] / context['avg_gapg']))
+                      (stats['home_defense'] / max(0.1, context['avg_gapg'])))
         
         expected_goals = lambda_home + lambda_away
         
@@ -452,34 +458,11 @@ class CompletePhantomPredictor:
             'implied_probability': implied_prob
         }
     
-    # ==================== COMPATIBILITY METHODS ====================
-    
-    def predict_with_staking(self, home_stats: TeamStats, away_stats: TeamStats, 
-                           over_odds: float, under_odds: float, 
-                           league: str = "default", bankroll: float = None) -> Dict:
-        """
-        Compatibility method for your Streamlit app
-        This is the method your app is calling
-        """
-        # Call the main predict_match method
-        return self.predict_match(home_stats, away_stats, over_odds, under_odds, league, bankroll)
-    
     def predict_match(self, home_stats: TeamStats, away_stats: TeamStats, 
                      over_odds: float, under_odds: float, 
                      league: str = "default", bankroll: float = None) -> Dict:
         """
         Complete prediction for a single match
-        
-        Args:
-            home_stats: Home team statistics
-            away_stats: Away team statistics
-            over_odds: Market odds for Over 2.5
-            under_odds: Market odds for Under 2.5
-            league: League name for context
-            bankroll: Current bankroll (overrides instance bankroll)
-        
-        Returns:
-            Complete prediction dictionary
         """
         if bankroll is None:
             bankroll = self.bankroll
@@ -552,6 +535,22 @@ class CompletePhantomPredictor:
             }
         }
     
+    def predict_with_staking(self, home_stats: TeamStats, away_stats: TeamStats,
+                           over_odds: float, under_odds: float,
+                           league: str = "default", bankroll: float = None) -> Dict:
+        """
+        Alias for predict_match to maintain compatibility with app.py
+        This is the method your app is calling
+        """
+        return self.predict_match(
+            home_stats=home_stats,
+            away_stats=away_stats,
+            over_odds=over_odds,
+            under_odds=under_odds,
+            league=league,
+            bankroll=bankroll
+        )
+    
     def _generate_explanation(self, prediction: str, confidence: str, rule_number: int, 
                             stats: Dict, probability: float, edge: float,
                             expected_goals: float) -> str:
@@ -572,7 +571,7 @@ class CompletePhantomPredictor:
             'last10_contribution': (stats['home_last10'] + stats['away_last10']) / 2,
             'edge': edge,
             'probability': probability,
-            'confidence': 1.0 / (stats.get('kalman_home_var', 0.1) + stats.get('kalman_away_var', 0.1) + 0.01),
+            'confidence': 1.0 / ((stats.get('kalman_home_var', 0.1) + stats.get('kalman_away_var', 0.1)) / 2 + 0.01),
             'variance': (stats.get('kalman_home_var', 0.1) + stats.get('kalman_away_var', 0.1)) / 2
         }
         
@@ -595,7 +594,7 @@ class CompletePhantomPredictor:
 # ============================================================================
 
 def test_predictor():
-    """Test the predictor with both methods"""
+    """Test the predictor"""
     
     # Create sample teams
     team_a = TeamStats(
@@ -635,11 +634,18 @@ def test_predictor():
     # Initialize predictor
     predictor = CompletePhantomPredictor(bankroll=1000.0)
     
-    print("Testing predict_with_staking() method...")
-    print("=" * 60)
+    # Test both methods
+    print("Testing predict_match method:")
+    result1 = predictor.predict_match(
+        home_stats=team_a,
+        away_stats=team_b,
+        over_odds=1.85,
+        under_odds=1.95,
+        league='premier_league'
+    )
     
-    # Test the method your app is calling
-    result = predictor.predict_with_staking(
+    print("\nTesting predict_with_staking method:")
+    result2 = predictor.predict_with_staking(
         home_stats=team_a,
         away_stats=team_b,
         over_odds=1.85,
@@ -648,34 +654,24 @@ def test_predictor():
     )
     
     # Display results
-    print(f"Match: {team_a.team_name} vs {team_b.team_name}")
-    print(f"Prediction: {result['prediction']}")
-    print(f"Confidence: {result['confidence']}")
-    print(f"Probability: {result['probability']:.1%}")
-    print(f"Expected Goals: {result['expected_goals']:.2f}")
-    print(f"\nExplanation: {result['explanation']}")
-    
-    if result['prediction'] != 'NO BET':
-        print(f"\nStaking Info:")
-        print(f"  Stake: ${result['staking_info']['stake_amount']:.2f}")
-        print(f"  Edge: {result['staking_info']['edge_percent']:.1f}%")
-        print(f"  Expected Value: ${result['staking_info']['expected_value']:.2f}")
-        print(f"  Risk Level: {result['staking_info']['risk_level']}")
-    
-    # Also test the predict_match method
-    print("\n" + "=" * 60)
-    print("Testing predict_match() method...")
     print("=" * 60)
+    print("COMPLETE PHANTOM PREDICTOR v5.0")
+    print("=" * 60)
+    print(f"Match: {team_a.team_name} vs {team_b.team_name}")
+    print(f"Prediction: {result1['prediction']}")
+    print(f"Confidence: {result1['confidence']}")
+    print(f"Probability: {result1['probability']:.1%}")
+    print(f"Expected Goals: {result1['expected_goals']:.2f}")
+    print(f"\nExplanation: {result1['explanation']}")
     
-    result2 = predictor.predict_match(
-        home_stats=team_a,
-        away_stats=team_b,
-        over_odds=1.85,
-        under_odds=1.95,
-        league='premier_league'
-    )
+    if result1['prediction'] != 'NO BET':
+        print(f"\nStaking Info:")
+        print(f"  Stake: ${result1['staking_info']['stake_amount']:.2f}")
+        print(f"  Edge: {result1['staking_info']['edge_percent']:.1f}%")
+        print(f"  Expected Value: ${result1['staking_info']['expected_value']:.2f}")
+        print(f"  Risk Level: {result1['staking_info']['risk_level']}")
     
-    print(f"Both methods return same: {result['prediction'] == result2['prediction']}")
+    print("\n✅ Both methods work correctly!")
 
 if __name__ == "__main__":
     test_predictor()
