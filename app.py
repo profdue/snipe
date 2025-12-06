@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import os
 from models.complete_predictor import CompletePhantomPredictor
-
+from models.complete_predictor import KalmanHybridPredictor, TeamStats
 class FootballPredictorApp:
     def __init__(self):
         self.predictor = CompletePhantomPredictor(bankroll=1000, min_confidence=0.55)
