@@ -67,37 +67,37 @@ class EdgeFinderFootballApp:
         """Load pre-defined market templates"""
         return {
             'balanced': {
+                'home_win': 2.50,
+                'draw': 3.40,
+                'away_win': 2.80,
+                'home_draw': 1.50,
+                'away_draw': 1.55,
+                'over_25': 1.85,
+                'under_25': 2.00,
+                'btts_yes': 1.75,
+                'btts_no': 2.05
+            },
+            'favorite_home': {
+                'home_win': 1.80,
+                'draw': 3.75,
+                'away_win': 4.50,
+                'home_draw': 1.25,
+                'away_draw': 2.10,
+                'over_25': 1.90,
+                'under_25': 1.95,
+                'btts_yes': 1.65,
+                'btts_no': 2.25
+            },
+            'favorite_away': {
+                'home_win': 4.00,
+                'draw': 3.60,
+                'away_win': 1.90,
+                'home_draw': 1.80,
+                'away_draw': 1.30,
                 'over_25': 1.85,
                 'under_25': 2.00,
                 'btts_yes': 1.70,
-                'btts_no': 2.10,
-                'home_win': 2.10,
-                'away_win': 3.50,
-                'draw': 3.40,
-                'home_draw': 1.40,
-                'away_draw': 1.80
-            },
-            'favorite_home': {
-                'over_25': 1.65,
-                'under_25': 2.20,
-                'btts_yes': 1.80,
-                'btts_no': 1.95,
-                'home_win': 1.50,
-                'away_win': 6.00,
-                'draw': 4.00,
-                'home_draw': 1.20,
-                'away_draw': 2.50
-            },
-            'favorite_away': {
-                'over_25': 1.70,
-                'under_25': 2.10,
-                'btts_yes': 1.75,
-                'btts_no': 2.00,
-                'home_win': 4.00,
-                'away_win': 1.80,
-                'draw': 3.60,
-                'home_draw': 1.80,
-                'away_draw': 1.30
+                'btts_no': 2.15
             }
         }
     
@@ -284,6 +284,13 @@ class EdgeFinderFootballApp:
                 color: white;
                 margin: 1rem 0;
             }
+            .market-category {
+                background-color: #f0f2f6;
+                padding: 0.5rem 1rem;
+                border-radius: 5px;
+                margin: 0.5rem 0;
+                font-weight: bold;
+            }
             </style>
         """, unsafe_allow_html=True)
         
@@ -321,7 +328,7 @@ class EdgeFinderFootballApp:
                 away_options = [t for t in team_names if t != home_team]
                 away_team = st.selectbox("✈️ Away Team", away_options)
             
-            # Market odds
+            # Market odds - PROPERLY ORGANIZED
             st.subheader("💰 Market Odds")
             
             template = st.selectbox(
@@ -330,31 +337,51 @@ class EdgeFinderFootballApp:
             )
             
             if template == "Custom":
+                # Match Result (1X2) - Most important
+                st.markdown('<div class="market-category">🏆 Match Result (1X2)</div>', unsafe_allow_html=True)
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    home_win = st.number_input("Home Win", value=2.50, min_value=1.01, max_value=20.0, step=0.05, key="home_win_custom")
+                with col2:
+                    draw = st.number_input("Draw", value=3.40, min_value=1.01, max_value=20.0, step=0.05, key="draw_custom")
+                with col3:
+                    away_win = st.number_input("Away Win", value=2.80, min_value=1.01, max_value=20.0, step=0.05, key="away_win_custom")
+                
+                # Double Chance - Secondary market
+                st.markdown('<div class="market-category">🔀 Double Chance</div>', unsafe_allow_html=True)
                 col1, col2 = st.columns(2)
                 with col1:
-                    over_odds = st.number_input("Over 2.5", value=1.85, min_value=1.01, max_value=10.0, step=0.05)
-                    btts_yes = st.number_input("BTTS Yes", value=1.70, min_value=1.01, max_value=10.0, step=0.05)
-                    home_win = st.number_input("Home Win", value=2.10, min_value=1.01, max_value=20.0, step=0.05)
-                    home_draw = st.number_input("Home or Draw", value=1.40, min_value=1.01, max_value=5.0, step=0.05)
-                
+                    home_draw = st.number_input("Home or Draw", value=1.50, min_value=1.01, max_value=5.0, step=0.05, key="home_draw_custom")
                 with col2:
-                    under_odds = st.number_input("Under 2.5", value=2.00, min_value=1.01, max_value=10.0, step=0.05)
-                    btts_no = st.number_input("BTTS No", value=2.10, min_value=1.01, max_value=10.0, step=0.05)
-                    away_win = st.number_input("Away Win", value=3.50, min_value=1.01, max_value=20.0, step=0.05)
-                    away_draw = st.number_input("Away or Draw", value=1.80, min_value=1.01, max_value=5.0, step=0.05)
+                    away_draw = st.number_input("Away or Draw", value=1.55, min_value=1.01, max_value=5.0, step=0.05, key="away_draw_custom")
                 
-                draw = st.number_input("Draw", value=3.40, min_value=1.01, max_value=20.0, step=0.05)
+                # Goals Markets
+                st.markdown('<div class="market-category">⚽ Goals Markets</div>', unsafe_allow_html=True)
+                col1, col2 = st.columns(2)
+                with col1:
+                    over_odds = st.number_input("Over 2.5 Goals", value=1.85, min_value=1.01, max_value=10.0, step=0.05, key="over_custom")
+                with col2:
+                    under_odds = st.number_input("Under 2.5 Goals", value=2.00, min_value=1.01, max_value=10.0, step=0.05, key="under_custom")
+                
+                # BTTS Markets
+                st.markdown('<div class="market-category">🎯 Both Teams to Score</div>', unsafe_allow_html=True)
+                col1, col2 = st.columns(2)
+                with col1:
+                    btts_yes = st.number_input("BTTS - Yes", value=1.75, min_value=1.01, max_value=10.0, step=0.05, key="btts_yes_custom")
+                with col2:
+                    btts_no = st.number_input("BTTS - No", value=2.05, min_value=1.01, max_value=10.0, step=0.05, key="btts_no_custom")
+                
             else:
                 template_odds = self.market_templates[template.lower().replace(' ', '_')]
-                over_odds = template_odds['over_25']
-                under_odds = template_odds['under_25']
-                btts_yes = template_odds['btts_yes']
-                btts_no = template_odds['btts_no']
                 home_win = template_odds['home_win']
                 away_win = template_odds['away_win']
                 draw = template_odds['draw']
                 home_draw = template_odds['home_draw']
                 away_draw = template_odds['away_draw']
+                over_odds = template_odds['over_25']
+                under_odds = template_odds['under_25']
+                btts_yes = template_odds['btts_yes']
+                btts_no = template_odds['btts_no']
             
             market_odds = {
                 'over_25': over_odds,
@@ -398,9 +425,15 @@ class EdgeFinderFootballApp:
                 - Recent form weighted 40% vs season 60%
                 
                 **Value Detection**: Edge = P_model - P_market
-                - ⭐⭐⭐ Golden Nugget: Edge > 5%
-                - ⭐⭐ Value Bet: Edge > 3%
-                - ⭐ Consider: Edge > 1%
+                - ⭐⭐⭐ **Golden Nugget**: Edge > 5% with high confidence
+                - ⭐⭐ **Value Bet**: Edge > 3% with moderate confidence  
+                - ⭐ **Consider**: Edge > 1% or situational value
+                
+                **Bet Order Priority**:
+                1. Match Result (Home Win / Draw / Away Win)
+                2. Double Chance (Home or Draw / Away or Draw)
+                3. Goals Markets (Over/Under 2.5)
+                4. BTTS Markets (Yes/No)
                 """)
             
             # Analyze button
@@ -759,6 +792,12 @@ class EdgeFinderFootballApp:
         - ⭐⭐⭐ **Golden Nugget**: Edge > 5% with high confidence
         - ⭐⭐ **Value Bet**: Edge > 3% with moderate confidence  
         - ⭐ **Consider**: Edge > 1% or situational value
+        
+        **Bet Order Priority:**
+        1. Match Result (Home Win / Draw / Away Win)
+        2. Double Chance (Home or Draw / Away or Draw)
+        3. Goals Markets (Over/Under 2.5)
+        4. BTTS Markets (Yes/No)
         
         ---
         
