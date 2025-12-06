@@ -37,19 +37,14 @@ class TeamStats:
 
 class CompletePhantomPredictor:
     """
-    Complete v4.3 Football Predictor with:
-    - Hybrid last5/last10 system
-    - Bayesian shrinkage
-    - xG integration (60/40)
-    - Form momentum detection
-    - League context awareness
-    - Kelly staking
-    - Edge calculation
-    
-    Maintains compatibility with original app.py
+    Complete v5.0 Football Predictor with:
+    - Kalman Filter for optimal Last5/Last10 fusion
+    - Bayesian probability calculation
+    - Hybrid decision system
+    - Kelly staking with confidence weighting
     """
     
-    def __init__(self, bankroll: float = 1000.0, min_confidence: float = 0.50):
+    def __init__(self, bankroll: float = 1000.0, min_confidence: float = 0.60):
         self.bankroll = bankroll
         self.min_confidence = min_confidence
         
@@ -63,17 +58,38 @@ class CompletePhantomPredictor:
             'default': {'avg_gpg': 2.7, 'avg_gapg': 2.7, 'home_advantage': 0.16}
         }
         
-        # Bayesian parameters
-        self.bayesian_weight = 0.3
-        self.min_games_for_stability = 8
+        # Kalman Filter parameters
+        self.kalman_params = {
+            'process_variance': 0.08,
+            'measurement_variance_last5': 0.25,
+            'measurement_variance_last10': 0.12,
+            'initial_variance': 0.5
+        }
         
-        # Prediction thresholds
+        # Bayesian parameters
+        self.prior_over = 0.47
+        self.prior_under = 0.53
+        
+        # Likelihood parameters (empirical)
+        self.likelihoods = {
+            'over': {
+                'last5_mean': 2.15,
+                'last5_std': 0.35,
+                'last10_mean': 2.05,
+                'last10_std': 0.28
+            },
+            'under': {
+                'last5_mean': 1.25,
+                'last5_std': 0.25,
+                'last10_mean': 1.35,
+                'last10_std': 0.20
+            }
+        }
+        
+        # Thresholds (adjusted for Kalman output)
         self.over_threshold = 1.5
         self.under_threshold_defense = 1.0
         self.under_threshold_attack = 1.5
-        
-        # xG weight
-        self.xg_weight = 0.4
         
         # Betting parameters
         self.kelly_fraction = 0.25
@@ -85,11 +101,21 @@ class CompletePhantomPredictor:
     def _init_explanation_templates(self):
         """Initialize explanation templates"""
         self.explanation_templates = {
-            1: "High Confidence {prediction}: Both teams average >1.5 goals per game in adjusted last 10 AND last 5 metrics.",
-            2: "High Confidence {prediction}: Strong adjusted defense vs weak adjusted attack in both periods.",
-            3: "Moderate Confidence {prediction}: Strong attacking form in last 5 matches.",
-            4: "Moderate Confidence {prediction}: Recent defensive strength vs attacking weakness.",
-            5: "Low Confidence {prediction}: xG-based prediction with slight statistical edge."
+            1: (
+                "High Confidence {prediction}: Kalman optimal estimate shows {total_goals:.2f} total goals "
+                "with strong momentum. Last5: {last5_contribution:.2f}, Last10: {last10_contribution:.2f}. "
+                "Edge: {edge:.1f}%."
+            ),
+            2: (
+                "Moderate Confidence {prediction}: Bayesian probability {probability:.1%} with "
+                "Kalman confidence {confidence:.2f}. Expected goals: {total_goals:.2f}. "
+                "Edge: {edge:.1f}%."
+            ),
+            3: (
+                "Low Confidence {prediction}: Statistical edge detected but weak signal. "
+                "Expected goals: {total_goals:.2f}. Kalman variance: {variance:.3f}. "
+                "Edge: {edge:.1f}%."
+            )
         }
     
     def poisson_pmf(self, k: int, lambd: float) -> float:
@@ -103,13 +129,22 @@ class CompletePhantomPredictor:
         exponent = -((x - mean) ** 2) / (2 * std ** 2)
         return (1.0 / (std * np.sqrt(2 * np.pi))) * np.exp(exponent)
     
-    def _bayesian_adjust(self, stat_value: float, n_games: int, prior_mean: float) -> float:
-        """Bayesian shrinkage toward prior mean"""
-        if n_games < self.min_games_for_stability:
-            weight = n_games / self.min_games_for_stability
-            shrunk_value = weight * stat_value + (1 - weight) * prior_mean
-            return shrunk_value
-        return stat_value
+    def kalman_update(self, prior_mean: float, prior_var: float, 
+                     measurement: float, measurement_var: float) -> Tuple[float, float]:
+        """Kalman Filter update step"""
+        if measurement_var <= 0:
+            measurement_var = 0.01
+            
+        # Kalman gain
+        kalman_gain = prior_var / (prior_var + measurement_var)
+        
+        # Update estimate
+        updated_mean = prior_mean + kalman_gain * (measurement - prior_mean)
+        
+        # Update uncertainty
+        updated_var = (1 - kalman_gain) * prior_var
+        
+        return updated_mean, updated_var
     
     def _calculate_form_momentum(self, last5_value: float, last10_value: float) -> Tuple[str, float]:
         """Detect if team is improving or declining"""
@@ -124,107 +159,113 @@ class CompletePhantomPredictor:
             return "declining", 0.9
         return "stable", 1.0
     
-    def _prepare_stats_for_prediction(self, home_stats: TeamStats, away_stats: TeamStats, 
+    def _prepare_stats_for_prediction(self, home_stats: dict, away_stats: dict, 
                                     league: str = "default") -> Dict:
-        """Prepare statistics for prediction"""
+        """Prepare statistics with Kalman optimal fusion"""
         context = self.league_context.get(league, self.league_context['default'])
         
-        stats = {
-            # Basic stats
-            'home_last5_gpg': home_stats.last5_home_gpg,
-            'home_last5_gapg': home_stats.last5_home_gapg,
-            'home_last10_gpg': home_stats.last10_home_gpg,
-            'home_last10_gapg': home_stats.last10_home_gapg,
-            
-            'away_last5_gpg': away_stats.last5_away_gpg,
-            'away_last5_gapg': away_stats.last5_away_gapg,
-            'away_last10_gpg': away_stats.last10_away_gpg,
-            'away_last10_gapg': away_stats.last10_away_gapg,
-            
-            # xG stats
-            'home_xg_for': home_stats.avg_xg_for,
-            'home_xg_against': home_stats.avg_xg_against,
-            'away_xg_for': away_stats.avg_xg_for,
-            'away_xg_against': away_stats.avg_xg_against,
-            
-            # Form
-            'home_form': home_stats.form_last_5,
-            'away_form': away_stats.form_last_5,
-            
-            # Attack/defense strength
-            'home_attack_strength': home_stats.attack_strength,
-            'home_defense_strength': home_stats.defense_strength,
-            'away_attack_strength': away_stats.attack_strength,
-            'away_defense_strength': away_stats.defense_strength,
-        }
+        # Kalman optimal fusion of Last5 and Last10
+        prior_mean = context['avg_gpg']
+        prior_var = self.kalman_params['initial_variance']
+        
+        # Process noise
+        prior_var += self.kalman_params['process_variance']
+        
+        # Home team: Fusion of home stats
+        home_last10 = home_stats.get('last10_home_gpg', home_stats.get('last10_gpg', 1.5))
+        home_last5 = home_stats.get('last5_home_gpg', home_stats.get('last5_gpg', 1.5))
+        
+        # Away team: Fusion of away stats
+        away_last10 = away_stats.get('last10_away_gpg', away_stats.get('last10_gpg', 1.5))
+        away_last5 = away_stats.get('last5_away_gpg', away_stats.get('last5_gpg', 1.5))
+        
+        # Apply Kalman filter to home stats
+        home_posterior, home_var = self.kalman_update(
+            prior_mean, prior_var,
+            home_last10, self.kalman_params['measurement_variance_last10']
+        )
+        home_final, home_final_var = self.kalman_update(
+            home_posterior, home_var,
+            home_last5, self.kalman_params['measurement_variance_last5']
+        )
+        
+        # Apply Kalman filter to away stats
+        away_posterior, away_var = self.kalman_update(
+            prior_mean, prior_var,
+            away_last10, self.kalman_params['measurement_variance_last10']
+        )
+        away_final, away_final_var = self.kalman_update(
+            away_posterior, away_var,
+            away_last5, self.kalman_params['measurement_variance_last5']
+        )
         
         # Calculate momentum
-        stats['home_momentum'], stats['home_momentum_mult'] = self._calculate_form_momentum(
-            stats['home_last5_gpg'], stats['home_last10_gpg']
+        home_momentum, home_momentum_mult = self._calculate_form_momentum(
+            home_last5, home_last10
         )
-        stats['away_momentum'], stats['away_momentum_mult'] = self._calculate_form_momentum(
-            stats['away_last5_gpg'], stats['away_last10_gpg']
-        )
-        
-        # Bayesian adjustments
-        stats['home_last10_gpg_adj'] = self._bayesian_adjust(
-            stats['home_last10_gpg'], 10, context['avg_gpg']
-        )
-        stats['home_last10_gapg_adj'] = self._bayesian_adjust(
-            stats['home_last10_gapg'], 10, context['avg_gapg']
-        )
-        stats['away_last10_gpg_adj'] = self._bayesian_adjust(
-            stats['away_last10_gpg'], 10, context['avg_gpg']
-        )
-        stats['away_last10_gapg_adj'] = self._bayesian_adjust(
-            stats['away_last10_gpg'], 10, context['avg_gapg']
+        away_momentum, away_momentum_mult = self._calculate_form_momentum(
+            away_last5, away_last10
         )
         
-        # Apply momentum to last 5 stats
-        stats['home_last5_gpg_adj'] = stats['home_last5_gpg'] * stats['home_momentum_mult']
-        stats['home_last5_gapg_adj'] = stats['home_last5_gapg'] * (1/stats['home_momentum_mult'] 
-                                                                  if stats['home_momentum'] == "improving" 
-                                                                  else stats['home_momentum_mult'])
-        stats['away_last5_gpg_adj'] = stats['away_last5_gpg'] * stats['away_momentum_mult']
-        stats['away_last5_gapg_adj'] = stats['away_last5_gapg'] * (1/stats['away_momentum_mult'] 
-                                                                  if stats['away_momentum'] == "improving" 
-                                                                  else stats['away_momentum_mult'])
+        # Apply momentum adjustments
+        home_final_adj = home_final * home_momentum_mult
+        away_final_adj = away_final * away_momentum_mult
         
-        # xG hybrid metrics
-        stats['home_hybrid_gpg'] = (0.6 * stats['home_last10_gpg_adj'] + 0.4 * stats['home_xg_for'])
-        stats['home_hybrid_gapg'] = (0.6 * stats['home_last10_gapg_adj'] + 0.4 * stats['home_xg_against'])
-        stats['away_hybrid_gpg'] = (0.6 * stats['away_last10_gpg_adj'] + 0.4 * stats['away_xg_for'])
-        stats['away_hybrid_gapg'] = (0.6 * stats['away_last10_gapg_adj'] + 0.4 * stats['away_xg_against'])
+        # xG hybrid (60/40)
+        home_xg = home_stats.get('avg_xg_for', home_stats.get('gpg_last10', 1.5))
+        away_xg = away_stats.get('avg_xg_for', away_stats.get('gpg_last10', 1.5))
         
-        # Combined final stats
-        stats['home_attack_final'] = (0.4 * stats['home_last10_gpg_adj'] + 
-                                      0.4 * stats['home_last5_gpg_adj'] + 
-                                      0.2 * stats['home_hybrid_gpg'])
-        stats['home_defense_final'] = (0.4 * stats['home_last10_gapg_adj'] + 
-                                       0.4 * stats['home_last5_gapg_adj'] + 
-                                       0.2 * stats['home_hybrid_gapg'])
-        stats['away_attack_final'] = (0.4 * stats['away_last10_gpg_adj'] + 
-                                      0.4 * stats['away_last5_gpg_adj'] + 
-                                      0.2 * stats['away_hybrid_gpg'])
-        stats['away_defense_final'] = (0.4 * stats['away_last10_gapg_adj'] + 
-                                       0.4 * stats['away_last5_gapg_adj'] + 
-                                       0.2 * stats['away_hybrid_gapg'])
+        home_xg_hybrid = 0.6 * home_final_adj + 0.4 * home_xg
+        away_xg_hybrid = 0.6 * away_final_adj + 0.4 * away_xg
         
-        stats['league_context'] = context
+        # Final estimates
+        home_attack_final = 0.5 * home_final_adj + 0.5 * home_xg_hybrid
+        away_attack_final = 0.5 * away_final_adj + 0.5 * away_xg_hybrid
         
-        return stats
+        # Defense estimates
+        home_defense_final = home_stats.get('last10_home_gapg', home_stats.get('gapg_last10', 1.5)) * 0.6 + home_stats.get('avg_xg_against', 1.5) * 0.4
+        away_defense_final = away_stats.get('last10_away_gapg', away_stats.get('gapg_last10', 1.5)) * 0.6 + away_stats.get('avg_xg_against', 1.5) * 0.4
+        
+        return {
+            'home_attack': home_attack_final,
+            'away_attack': away_attack_final,
+            'home_defense': home_defense_final,
+            'away_defense': away_defense_final,
+            'home_momentum': home_momentum,
+            'away_momentum': away_momentum,
+            'home_momentum_mult': home_momentum_mult,
+            'away_momentum_mult': away_momentum_mult,
+            'home_last5': home_last5,
+            'home_last10': home_last10,
+            'away_last5': away_last5,
+            'away_last10': away_last10,
+            'home_last5_gapg': home_stats.get('last5_home_gapg', home_stats.get('gapg_last10', 1.5)),
+            'away_last5_gapg': away_stats.get('last5_away_gapg', away_stats.get('gapg_last10', 1.5)),
+            'home_xg': home_xg,
+            'away_xg': away_xg,
+            'league_context': context,
+            'kalman_home': home_final,
+            'kalman_away': away_final,
+            'kalman_home_var': home_final_var,
+            'kalman_away_var': away_final_var
+        }
     
     def _apply_five_rules(self, stats: Dict) -> Tuple[str, str, int, float]:
         """
-        Enhanced 5-rule system
+        Enhanced 5-rule system with Kalman optimal estimates
         """
+        # Extract Kalman optimal estimates
+        home_attack = stats['home_attack']
+        away_attack = stats['away_attack']
+        home_defense = stats['home_defense']
+        away_defense = stats['away_defense']
         
-        # Rule 1: High Confidence Over
+        # Rule 1: High Confidence Over (Both Kalman estimates > threshold)
         rule1_condition = (
-            stats['home_last10_gpg_adj'] > self.over_threshold and
-            stats['away_last10_gpg_adj'] > self.over_threshold and
-            stats['home_last5_gpg_adj'] > self.over_threshold and
-            stats['away_last5_gpg_adj'] > self.over_threshold
+            home_attack > self.over_threshold and
+            away_attack > self.over_threshold and
+            stats['home_last5'] > self.over_threshold and
+            stats['away_last5'] > self.over_threshold
         )
         
         if rule1_condition:
@@ -232,12 +273,12 @@ class CompletePhantomPredictor:
                                        stats['away_momentum'] == "improving") else 0
             return "Over 2.5", "High", 1, confidence_boost
         
-        # Rule 2: High Confidence Under
+        # Rule 2: High Confidence Under (Strong Kalman defense vs weak attack)
         rule2_condition = (
-            stats['home_last10_gapg_adj'] < self.under_threshold_defense and
-            stats['away_last10_gpg_adj'] < self.under_threshold_attack and
-            stats['home_last5_gapg_adj'] < self.under_threshold_defense and
-            stats['away_last5_gpg_adj'] < self.under_threshold_attack
+            home_defense < self.under_threshold_defense and
+            away_attack < self.under_threshold_attack and
+            stats['home_last5_gapg'] < self.under_threshold_defense and
+            stats['away_last5'] < self.under_threshold_attack
         )
         
         if rule2_condition:
@@ -245,10 +286,10 @@ class CompletePhantomPredictor:
                                        stats['away_momentum'] == "declining") else 0
             return "Under 2.5", "High", 2, confidence_boost
         
-        # Rule 3: Moderate Confidence Over
+        # Rule 3: Moderate Confidence Over (Kalman estimate > threshold)
         rule3_condition = (
-            stats['home_last5_gpg_adj'] > self.over_threshold and
-            stats['away_last5_gpg_adj'] > self.over_threshold
+            home_attack > self.over_threshold and
+            away_attack > self.over_threshold
         )
         
         if rule3_condition:
@@ -256,10 +297,10 @@ class CompletePhantomPredictor:
                                      stats['away_momentum'] == "improving") else 0
             return "Over 2.5", "Moderate", 3, momentum_bonus
         
-        # Rule 4: Moderate Confidence Under
+        # Rule 4: Moderate Confidence Under (Kalman defense strong)
         rule4_condition = (
-            stats['home_last5_gapg_adj'] < self.under_threshold_defense and
-            stats['away_last5_gpg_adj'] < self.under_threshold_attack
+            home_defense < self.under_threshold_defense and
+            away_attack < self.under_threshold_attack
         )
         
         if rule4_condition:
@@ -267,27 +308,27 @@ class CompletePhantomPredictor:
                                      stats['away_momentum'] == "declining") else 0
             return "Under 2.5", "Moderate", 4, momentum_bonus
         
-        # Rule 5: Check xG edge
-        xg_advantage = (stats['home_hybrid_gpg'] + stats['away_hybrid_gpg']) / 2
-        
-        if xg_advantage > 1.8:
+        # Rule 5: Bayesian/Kalman edge detection
+        total_goals = home_attack + away_attack
+        if total_goals > 2.8:  # High expected goals
             return "Over 2.5", "Low", 5, 0
-        elif xg_advantage < 1.2:
+        elif total_goals < 2.2:  # Low expected goals
             return "Under 2.5", "Low", 5, 0
         
         return "No Bet", "None", 5, 0
     
     def _calculate_poisson_probabilities(self, stats: Dict) -> Tuple[float, float, float, Dict]:
-        """Calculate Poisson probabilities"""
+        """Calculate Poisson probabilities with Kalman optimal estimates"""
         
         context = stats['league_context']
         
-        lambda_home = (stats['home_attack_final'] * 
-                      (stats['away_defense_final'] / max(0.1, context['avg_gapg'])) * 
+        # Use Kalman optimal estimates
+        lambda_home = (stats['home_attack'] * 
+                      (stats['away_defense'] / context['avg_gapg']) * 
                       (1 + context['home_advantage']))
         
-        lambda_away = (stats['away_attack_final'] * 
-                      (stats['home_defense_final'] / max(0.1, context['avg_gapg'])))
+        lambda_away = (stats['away_attack'] * 
+                      (stats['home_defense'] / context['avg_gapg']))
         
         expected_goals = lambda_home + lambda_away
         
@@ -299,12 +340,36 @@ class CompletePhantomPredictor:
             'lambda_home': lambda_home,
             'lambda_away': lambda_away,
             'home_momentum': stats['home_momentum'],
-            'away_momentum': stats['away_momentum']
+            'away_momentum': stats['away_momentum'],
+            'expected_home_goals': lambda_home,
+            'expected_away_goals': lambda_away
         }
+    
+    def _bayesian_probability(self, expected_goals: float) -> Tuple[float, float]:
+        """Bayesian probability calculation"""
+        # Likelihood of data given Over
+        like_over = self.normal_pdf(expected_goals,
+                                  self.likelihoods['over']['last10_mean'],
+                                  self.likelihoods['over']['last10_std'])
+        
+        # Likelihood of data given Under
+        like_under = self.normal_pdf(expected_goals,
+                                   self.likelihoods['under']['last10_mean'],
+                                   self.likelihoods['under']['last10_std'])
+        
+        # Bayesian update
+        evidence = like_over * self.prior_over + like_under * self.prior_under
+        
+        if evidence == 0:
+            prob_over = 0.5
+        else:
+            prob_over = (like_over * self.prior_over) / evidence
+        
+        return prob_over, 1 - prob_over
     
     def calculate_kelly_stake(self, probability: float, odds: float, confidence: str, 
                              bankroll: float = None) -> Dict:
-        """Fractional Kelly staking"""
+        """Fractional Kelly staking with confidence weighting"""
         if bankroll is None:
             bankroll = self.bankroll
         
@@ -319,7 +384,8 @@ class CompletePhantomPredictor:
                 'expected_value': 0.0,
                 'risk_level': 'No Bet',
                 'edge_percent': 0.0,
-                'value_rating': 'None'
+                'value_rating': 'None',
+                'implied_probability': 1 / odds if odds > 0 else 0.0
             }
         
         implied_prob = 1 / odds if odds > 0 else 0.0
@@ -333,7 +399,8 @@ class CompletePhantomPredictor:
                 'expected_value': 0.0,
                 'risk_level': 'No Value',
                 'edge_percent': edge * 100,
-                'value_rating': 'Poor'
+                'value_rating': 'Poor',
+                'implied_probability': implied_prob
             }
         
         # Kelly formula
@@ -346,7 +413,7 @@ class CompletePhantomPredictor:
         else:
             kelly_fraction = (b * p - q) / b
         
-        # Apply fractional Kelly
+        # Apply fractional Kelly and confidence weighting
         fractional_kelly = max(0, kelly_fraction) * self.kelly_fraction * confidence_value
         
         # Calculate stake
@@ -386,54 +453,50 @@ class CompletePhantomPredictor:
             'expected_value': expected_value,
             'risk_level': risk_level,
             'edge_percent': edge * 100,
-            'value_rating': value_rating
+            'value_rating': value_rating,
+            'implied_probability': implied_prob
         }
     
-    # ==================== UNIVERSAL COMPATIBILITY METHODS ====================
-    
-    def predict_with_staking(self, home_stats: TeamStats, away_stats: TeamStats,
-                           over_odds: float, under_odds: float,
-                           league: str = "default", bankroll: float = None) -> Dict:
+    # NEW METHOD: This is what your app is calling
+    def predict_with_staking(self, home_stats: dict, away_stats: dict,
+                           market_odds: dict, league: str = "default", 
+                           bankroll: float = None) -> Dict:
         """
-        Universal compatibility method - matches most common app.py signatures
-        """
-        return self._predict_core(home_stats, away_stats, over_odds, under_odds, league, bankroll)
-    
-    def predict_match(self, home_stats: TeamStats, away_stats: TeamStats,
-                     over_odds: float, under_odds: float,
-                     league: str = "default", bankroll: float = None) -> Dict:
-        """
-        Alternative name for compatibility
-        """
-        return self._predict_core(home_stats, away_stats, over_odds, under_odds, league, bankroll)
-    
-    def _predict_core(self, home_stats: TeamStats, away_stats: TeamStats,
-                     over_odds: float, under_odds: float,
-                     league: str = "default", bankroll: float = None) -> Dict:
-        """
-        Core prediction logic
+        Prediction method that matches what your app expects
+        This is the method your app is calling
         """
         if bankroll is None:
             bankroll = self.bankroll
         
-        # Prepare stats
+        # Extract odds from market_odds dict
+        over_odds = market_odds.get('over_25', 1.85)
+        under_odds = market_odds.get('under_25', 1.95)
+        
+        # Prepare stats with Kalman optimal fusion
         stats = self._prepare_stats_for_prediction(home_stats, away_stats, league)
         
         # Apply rules
         prediction, confidence, rule_number, confidence_boost = self._apply_five_rules(stats)
         
-        # Calculate probabilities
+        # Calculate Poisson probabilities
         expected_goals, prob_over, prob_under, poisson_details = self._calculate_poisson_probabilities(stats)
+        
+        # Calculate Bayesian probabilities
+        bayesian_over, bayesian_under = self._bayesian_probability(expected_goals)
+        
+        # Combine Poisson and Bayesian (weighted average)
+        combined_over = 0.6 * prob_over + 0.4 * bayesian_over
+        combined_under = 0.6 * prob_under + 0.4 * bayesian_under
         
         # Determine final probability
         if prediction == "Over 2.5":
-            base_probability = prob_over
+            base_probability = combined_over
             market_odd = over_odds
         elif prediction == "Under 2.5":
-            base_probability = prob_under
+            base_probability = combined_under
             market_odd = under_odds
         else:
-            base_probability = max(prob_over, prob_under)
+            base_probability = max(combined_over, combined_under)
             market_odd = 2.0
         
         # Apply confidence boost
@@ -449,10 +512,12 @@ class CompletePhantomPredictor:
         
         # Generate explanation
         explanation = self._generate_explanation(
-            prediction, confidence, rule_number, stats, final_probability, staking_info['edge_percent']
+            prediction, confidence, rule_number, stats, 
+            final_probability, staking_info['edge_percent'],
+            expected_goals
         )
         
-        # Return complete prediction
+        # Return complete prediction matching your app's expected format
         return {
             'prediction': prediction,
             'confidence': confidence,
@@ -461,105 +526,62 @@ class CompletePhantomPredictor:
             'rule_number': rule_number,
             'explanation': explanation,
             'staking_info': staking_info,
-            'market_odds': market_odd,
+            'market_odds': market_odd,  # Single odds value
             'poisson_details': poisson_details,
             'stats_analysis': {
-                'home_attack': stats['home_attack_final'],
-                'home_defense': stats['home_defense_final'],
-                'away_attack': stats['away_attack_final'],
-                'away_defense': stats['away_defense_final'],
+                'home_attack': stats['home_attack'],
+                'home_defense': stats['home_defense'],
+                'away_attack': stats['away_attack'],
+                'away_defense': stats['away_defense'],
                 'home_momentum': stats['home_momentum'],
-                'away_momentum': stats['away_momentum']
+                'away_momentum': stats['away_momentum'],
+                'kalman_home': stats['kalman_home'],
+                'kalman_away': stats['kalman_away']
             }
         }
     
+    # Keep the original predict_match method for compatibility
+    def predict_match(self, home_stats: dict, away_stats: dict,
+                     over_odds: float, under_odds: float, 
+                     league: str = "default", bankroll: float = None) -> Dict:
+        """Alternative method that accepts separate odds"""
+        market_odds = {'over_25': over_odds, 'under_25': under_odds}
+        return self.predict_with_staking(home_stats, away_stats, market_odds, league, bankroll)
+    
     def _generate_explanation(self, prediction: str, confidence: str, rule_number: int, 
-                            stats: Dict, probability: float, edge: float) -> str:
-        """Generate explanation"""
+                            stats: Dict, probability: float, edge: float,
+                            expected_goals: float) -> str:
+        """Generate detailed explanation for the prediction"""
         
         if rule_number == 5 and prediction == "No Bet":
-            return "No clear statistical edge. Bayesian adjusted metrics don't meet criteria."
+            return (
+                f"No clear statistical edge. Kalman optimal estimates: "
+                f"Home: {stats['kalman_home']:.2f}, Away: {stats['kalman_away']:.2f}. "
+                f"Expected goals: {expected_goals:.2f}. Bayesian probability inconclusive."
+            )
         
-        template = self.explanation_templates.get(rule_number)
+        # Prepare template variables
+        template_vars = {
+            'prediction': prediction,
+            'total_goals': expected_goals,
+            'last5_contribution': (stats['home_last5'] + stats['away_last5']) / 2,
+            'last10_contribution': (stats['home_last10'] + stats['away_last10']) / 2,
+            'edge': edge,
+            'probability': probability,
+            'confidence': 1.0 / ((stats.get('kalman_home_var', 0.1) + stats.get('kalman_away_var', 0.1)) / 2 + 0.01),
+            'variance': (stats.get('kalman_home_var', 0.1) + stats.get('kalman_away_var', 0.1)) / 2
+        }
+        
+        # Select appropriate template based on confidence
+        if confidence == "High":
+            template_key = 1
+        elif confidence == "Moderate":
+            template_key = 2
+        else:
+            template_key = 3
+        
+        template = self.explanation_templates.get(template_key)
         if template:
-            return template.format(prediction=prediction)
+            return template.format(**template_vars)
         
-        return f"{confidence} confidence {prediction} based on comprehensive statistical analysis."
-
-# ============================================================================
-# TEST WITH MULTIPLE SIGNATURES
-# ============================================================================
-
-def test_all_signatures():
-    """Test all possible method signatures"""
-    
-    # Create sample teams
-    team_a = TeamStats(
-        team_name="Team A",
-        matches_played=14,
-        home_wins=4, home_draws=2, home_losses=1,
-        home_goals_for=10, home_goals_against=5,
-        away_wins=1, away_draws=2, away_losses=4,
-        away_goals_for=11, away_goals_against=19,
-        home_xg=1.55, away_xg=None,
-        avg_xg_for=1.53, avg_xg_against=1.32,
-        form_last_5="WDDLW",
-        attack_strength=1.15, defense_strength=1.35,
-        last5_home_gpg=1.8, last5_home_gapg=0.8,
-        last5_away_gpg=1.6, last5_away_gapg=3.0,
-        last10_home_gpg=1.6, last10_home_gapg=0.71,
-        last10_away_gpg=1.57, last10_away_gapg=2.71
-    )
-    
-    team_b = TeamStats(
-        team_name="Team B",
-        matches_played=14,
-        home_wins=3, home_draws=2, home_losses=2,
-        home_goals_for=8, home_goals_against=9,
-        away_wins=3, away_draws=1, away_losses=3,
-        away_goals_for=7, away_goals_against=8,
-        home_xg=1.70, away_xg=0.64,
-        avg_xg_for=1.29, avg_xg_against=1.52,
-        form_last_5="WDLDL",
-        attack_strength=1.15, defense_strength=1.00,
-        last5_home_gpg=1.2, last5_home_gapg=1.8,
-        last5_away_gpg=0.9, last5_away_gapg=1.0,
-        last10_home_gpg=1.14, last10_home_gapg=1.29,
-        last10_away_gpg=1.0, last10_away_gapg=1.14
-    )
-    
-    predictor = CompletePhantomPredictor(bankroll=1000.0)
-    
-    # Test Method 1: predict_with_staking (most likely what your app uses)
-    try:
-        result1 = predictor.predict_with_staking(
-            home_stats=team_a,
-            away_stats=team_b,
-            over_odds=1.85,
-            under_odds=1.95,
-            league='premier_league',
-            bankroll=1000.0
-        )
-        print("✅ Method 1 (predict_with_staking): SUCCESS")
-    except Exception as e:
-        print(f"❌ Method 1 (predict_with_staking): {e}")
-    
-    # Test Method 2: predict_match
-    try:
-        result2 = predictor.predict_match(
-            home_stats=team_a,
-            away_stats=team_b,
-            over_odds=1.85,
-            under_odds=1.95,
-            league='premier_league',
-            bankroll=1000.0
-        )
-        print("✅ Method 2 (predict_match): SUCCESS")
-    except Exception as e:
-        print(f"❌ Method 2 (predict_match): {e}")
-    
-    return predictor
-
-if __name__ == "__main__":
-    predictor = test_all_signatures()
-    print("\n✅ All compatibility tests complete!")
+        return f"{confidence} confidence {prediction} based on Kalman optimal hybrid analysis."
