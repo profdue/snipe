@@ -35,7 +35,7 @@ class EnhancedTeamStats:
     possession_avg: float
     shots_per_game: float
     shots_on_target_pg: float
-    conversion_rate: float
+    conversion_rate: float  # As decimal (0.12 for 12%)
     xg_for_avg: float
     xg_against_avg: float
     
@@ -52,20 +52,20 @@ class EnhancedTeamStats:
     away_goals_against: int
     
     # Defense Patterns
-    clean_sheet_pct: float
-    clean_sheet_pct_home: float
-    clean_sheet_pct_away: float
-    failed_to_score_pct: float
-    failed_to_score_pct_home: float
-    failed_to_score_pct_away: float
+    clean_sheet_pct: float  # As decimal
+    clean_sheet_pct_home: float  # As decimal
+    clean_sheet_pct_away: float  # As decimal
+    failed_to_score_pct: float  # As decimal
+    failed_to_score_pct_home: float  # As decimal
+    failed_to_score_pct_away: float  # As decimal
     
     # Transition Patterns
-    btts_pct: float
-    btts_pct_home: float
-    btts_pct_away: float
-    over25_pct: float
-    over25_pct_home: float
-    over25_pct_away: float
+    btts_pct: float  # As decimal
+    btts_pct_home: float  # As decimal
+    btts_pct_away: float  # As decimal
+    over25_pct: float  # As decimal
+    over25_pct_home: float  # As decimal
+    over25_pct_away: float  # As decimal
     
     # Recent Form
     last5_form: str
@@ -77,7 +77,7 @@ class EnhancedTeamStats:
     
     def __post_init__(self):
         """Handle percentage strings and other data cleaning"""
-        # Convert percentage strings to floats for ALL percentage fields
+        # Convert percentage strings to proper decimal values
         percentage_fields = [
             'possession_avg', 'conversion_rate', 
             'clean_sheet_pct', 'clean_sheet_pct_home', 'clean_sheet_pct_away',
@@ -89,18 +89,27 @@ class EnhancedTeamStats:
         for field in percentage_fields:
             value = getattr(self, field)
             if isinstance(value, str):
-                # Remove % sign and convert to float
+                # Remove % sign and convert to proper decimal
                 try:
-                    # Handle "6%" -> 6.0, "13%" -> 13.0
                     cleaned = value.replace('%', '').strip()
-                    if cleaned:  # Check if not empty
-                        setattr(self, field, float(cleaned))
+                    if cleaned:
+                        # Convert percentage to decimal (e.g., "6%" -> 0.06)
+                        setattr(self, field, float(cleaned) / 100.0)
                     else:
                         setattr(self, field, 0.0)
                 except (ValueError, AttributeError):
                     setattr(self, field, 0.0)
+            elif isinstance(value, (int, float)):
+                # If it's already a number, check if it's > 1 (likely a percentage)
+                if value > 1.0 and field not in ['possession_avg']:  # possession can be > 100 in some systems
+                    # Assume it's a percentage (e.g., 6.0 means 6%)
+                    setattr(self, field, value / 100.0)
             elif value is None or (isinstance(value, float) and np.isnan(value)):
                 setattr(self, field, 0.0)
+        
+        # Handle possession separately (should be between 0-1)
+        if self.possession_avg > 1.0:
+            self.possession_avg = self.possession_avg / 100.0
         
         # Handle form string
         if not self.last5_form or (isinstance(self.last5_form, float) and np.isnan(self.last5_form)):
@@ -148,14 +157,16 @@ class EnhancedTeamStats:
     @property
     def style(self) -> TeamStyle:
         """Determine team playing style based on metrics"""
-        # Handle cases where possession_avg might be 0 due to parsing issues
-        if self.possession_avg >= 55:
+        # Convert possession to percentage for classification
+        possession_pct = self.possession_avg * 100 if self.possession_avg <= 1.0 else self.possession_avg
+        
+        if possession_pct >= 55:
             return TeamStyle.POSSESSION
-        elif self.possession_avg <= 45 and self.possession_avg > 0:  # > 0 to avoid default
+        elif possession_pct <= 45:
             return TeamStyle.COUNTER
-        elif self.shots_per_game >= 15:
+        elif self.shots_per_game >= 14:
             return TeamStyle.HIGH_PRESS
-        elif self.shots_per_game <= 8 and self.shots_per_game > 0:
+        elif self.shots_per_game <= 9:
             return TeamStyle.LOW_BLOCK
         else:
             return TeamStyle.BALANCED
@@ -180,7 +191,7 @@ class EnhancedTeamStats:
 
 class EdgeFinderPredictor:
     """
-    v1.0 Football Predictor based on "3 Things" Framework:
+    v1.1 Football Predictor based on "3 Things" Framework:
     1. Team Identity (What they ARE)
     2. Defense (What they STOP)
     3. Transition (How they CHANGE)
@@ -195,50 +206,74 @@ class EdgeFinderPredictor:
         # League context with possession benchmarks
         self.league_context = {
             'premier_league': {
-                'avg_gpg': 2.8, 'avg_gapg': 2.8, 'home_advantage': 0.15,
-                'avg_possession': 50.0, 'avg_conversion': 11.0
+                'avg_gpg': 2.7,  # Fixed: Real Premier League average
+                'avg_xg_for': 1.4,  # Average xG per team
+                'avg_xg_against': 1.4,  # Average xG conceded
+                'home_advantage': 0.15,
+                'avg_possession': 0.50,  # As decimal
+                'avg_conversion': 0.11  # As decimal
             },
             'la_liga': {
-                'avg_gpg': 2.6, 'avg_gapg': 2.6, 'home_advantage': 0.18,
-                'avg_possession': 52.0, 'avg_conversion': 10.5
+                'avg_gpg': 2.6,
+                'avg_xg_for': 1.35,
+                'avg_xg_against': 1.35,
+                'home_advantage': 0.18,
+                'avg_possession': 0.52,
+                'avg_conversion': 0.105
             },
             'bundesliga': {
-                'avg_gpg': 3.1, 'avg_gapg': 3.1, 'home_advantage': 0.12,
-                'avg_possession': 51.0, 'avg_conversion': 12.5
+                'avg_gpg': 3.1,
+                'avg_xg_for': 1.55,
+                'avg_xg_against': 1.55,
+                'home_advantage': 0.12,
+                'avg_possession': 0.51,
+                'avg_conversion': 0.125
             },
             'serie_a': {
-                'avg_gpg': 2.5, 'avg_gapg': 2.5, 'home_advantage': 0.20,
-                'avg_possession': 49.0, 'avg_conversion': 9.5
+                'avg_gpg': 2.5,
+                'avg_xg_for': 1.25,
+                'avg_xg_against': 1.25,
+                'home_advantage': 0.20,
+                'avg_possession': 0.49,
+                'avg_conversion': 0.095
             },
             'ligue_1': {
-                'avg_gpg': 2.7, 'avg_gapg': 2.7, 'home_advantage': 0.16,
-                'avg_possession': 50.0, 'avg_conversion': 10.8
+                'avg_gpg': 2.7,
+                'avg_xg_for': 1.35,
+                'avg_xg_against': 1.35,
+                'home_advantage': 0.16,
+                'avg_possession': 0.50,
+                'avg_conversion': 0.108
             },
             'default': {
-                'avg_gpg': 2.7, 'avg_gapg': 2.7, 'home_advantage': 0.16,
-                'avg_possession': 50.0, 'avg_conversion': 11.0
+                'avg_gpg': 2.7,
+                'avg_xg_for': 1.4,
+                'avg_xg_against': 1.4,
+                'home_advantage': 0.16,
+                'avg_possession': 0.50,
+                'avg_conversion': 0.11
             }
         }
         
         # Style matchup adjustments
         self.style_adjustments = {
             (TeamStyle.POSSESSION, TeamStyle.LOW_BLOCK): {
-                'home_goals_mult': 0.7,  # Possession teams struggle vs low block
-                'away_goals_mult': 1.1,  # Counter teams effective
-                'under_bias': 0.15,      # Increased under probability
-                'draw_bias': 0.10        # Increased draw probability
+                'home_goals_mult': 0.9,  # Reduced effect
+                'away_goals_mult': 1.0,
+                'under_bias': 0.05,      # Reduced bias
+                'draw_bias': 0.05
             },
             (TeamStyle.COUNTER, TeamStyle.HIGH_PRESS): {
-                'home_goals_mult': 1.2,
+                'home_goals_mult': 1.1,
                 'away_goals_mult': 1.0,
-                'over_bias': 0.15,
-                'btts_bias': 0.10
+                'over_bias': 0.05,
+                'btts_bias': 0.05
             },
             (TeamStyle.HIGH_PRESS, TeamStyle.HIGH_PRESS): {
-                'home_goals_mult': 1.1,
-                'away_goals_mult': 1.1,
-                'over_bias': 0.20,
-                'btts_bias': 0.15
+                'home_goals_mult': 1.05,
+                'away_goals_mult': 1.05,
+                'over_bias': 0.10,
+                'btts_bias': 0.08
             },
         }
         
@@ -265,10 +300,10 @@ class EdgeFinderPredictor:
     def _init_explanation_templates(self):
         """Initialize explanation templates for different insights"""
         self.explanation_templates = {
-            'style_matchup': "🎯 {style_clash}: {home_style} ({home_possession}%) vs {away_style} ({away_possession}%). {insight}",
-            'efficiency_mismatch': "⚡ Efficiency Mismatch: {team1} ({conv1}% conversion) vs {team2} ({conv2}% conversion). {insight}",
-            'defensive_pattern': "🛡️ Defensive Pattern: {team} has {clean_sheets}% clean sheets, fails to score {failed}%. {insight}",
-            'transition_trend': "📈 Transition Trend: {team} BTTS {btts}%, Over 2.5 {over25}%. {insight}",
+            'style_matchup': "🎯 {style_clash}: {home_style} ({home_possession:.0f}%) vs {away_style} ({away_possession:.0f}%). {insight}",
+            'efficiency_mismatch': "⚡ Efficiency Mismatch: {team1} ({conv1:.1f}% conversion) vs {team2} ({conv2:.1f}% conversion). {insight}",
+            'defensive_pattern': "🛡️ Defensive Pattern: {team} has {clean_sheets:.1f}% clean sheets, fails to score {failed:.1f}%. {insight}",
+            'transition_trend': "📈 Transition Trend: {team} BTTS {btts:.1f}%, Over 2.5 {over25:.1f}%. {insight}",
             'form_momentum': "📊 Form Momentum: {team} last 5: {form}. {insight}",
             'value_finding': "💰 Value Found: Model: {model_prob:.1%} vs Market: {market_prob:.1%} = {edge:.1f}% edge.",
             'no_edge': "❌ No Edge: Model: {model_prob:.1%} vs Market: {market_prob:.1%} = {edge:.1f}% edge."
@@ -277,10 +312,16 @@ class EdgeFinderPredictor:
     def analyze_team_identity(self, home_stats: EnhancedTeamStats, 
                             away_stats: EnhancedTeamStats) -> Dict:
         """Analyze the Team Identity dimension"""
+        # Convert to percentages for display
+        home_possession_pct = home_stats.possession_avg * 100
+        away_possession_pct = away_stats.possession_avg * 100
+        home_conversion_pct = home_stats.conversion_rate * 100
+        away_conversion_pct = away_stats.conversion_rate * 100
+        
         analysis = {
             'style_clash': None,
-            'possession_difference': home_stats.possession_avg - away_stats.possession_avg,
-            'conversion_comparison': home_stats.conversion_rate - away_stats.conversion_rate,
+            'possession_difference': home_possession_pct - away_possession_pct,
+            'conversion_comparison': home_conversion_pct - away_conversion_pct,
             'shots_difference': home_stats.shots_per_game - away_stats.shots_per_game,
             'efficiency_ratio': home_stats.conversion_rate / away_stats.conversion_rate 
                                 if away_stats.conversion_rate > 0 else 1.0,
@@ -295,20 +336,20 @@ class EdgeFinderPredictor:
         # Generate insights
         if analysis['possession_difference'] > 10:
             analysis['insights'].append(
-                f"Home team dominates possession ({home_stats.possession_avg:.1f}% vs {away_stats.possession_avg:.1f}%)"
+                f"Home team dominates possession ({home_possession_pct:.1f}% vs {away_possession_pct:.1f}%)"
             )
         elif analysis['possession_difference'] < -10:
             analysis['insights'].append(
-                f"Away team dominates possession ({away_stats.possession_avg:.1f}% vs {home_stats.possession_avg:.1f}%)"
+                f"Away team dominates possession ({away_possession_pct:.1f}% vs {home_possession_pct:.1f}%)"
             )
         
         if analysis['conversion_comparison'] > 3:
             analysis['insights'].append(
-                f"Home team more efficient ({home_stats.conversion_rate:.1f}% vs {away_stats.conversion_rate:.1f}% conversion)"
+                f"Home team more efficient ({home_conversion_pct:.1f}% vs {away_conversion_pct:.1f}% conversion)"
             )
         elif analysis['conversion_comparison'] < -3:
             analysis['insights'].append(
-                f"Away team more efficient ({away_stats.conversion_rate:.1f}% vs {home_stats.conversion_rate:.1f}% conversion)"
+                f"Away team more efficient ({away_conversion_pct:.1f}% vs {home_conversion_pct:.1f}% conversion)"
             )
         
         return analysis
@@ -316,38 +357,50 @@ class EdgeFinderPredictor:
     def analyze_defense_patterns(self, home_stats: EnhancedTeamStats,
                                away_stats: EnhancedTeamStats) -> Dict:
         """Analyze the Defense dimension"""
+        # Convert to percentages for display
+        home_cs_pct = home_stats.clean_sheet_pct_home * 100
+        away_cs_pct = away_stats.clean_sheet_pct_away * 100
+        home_failed_pct = home_stats.failed_to_score_pct_home * 100
+        away_failed_pct = away_stats.failed_to_score_pct_away * 100
+        
         analysis = {
-            'home_clean_sheet_strength': home_stats.clean_sheet_pct_home,
-            'away_clean_sheet_strength': away_stats.clean_sheet_pct_away,
-            'home_scoring_reliability': 100 - home_stats.failed_to_score_pct_home,
-            'away_scoring_reliability': 100 - away_stats.failed_to_score_pct_away,
+            'home_clean_sheet_strength': home_cs_pct,
+            'away_clean_sheet_strength': away_cs_pct,
+            'home_scoring_reliability': 100 - home_failed_pct,
+            'away_scoring_reliability': 100 - away_failed_pct,
             'defensive_mismatch': None,
             'insights': []
         }
         
         # Determine defensive mismatch
-        if home_stats.clean_sheet_pct_home > 30 and away_stats.failed_to_score_pct_away > 30:
+        if home_cs_pct > 30 and away_failed_pct > 30:
             analysis['defensive_mismatch'] = "Strong home defense vs weak away attack"
             analysis['insights'].append("High clean sheet potential for home team")
-        elif away_stats.clean_sheet_pct_away > 30 and home_stats.failed_to_score_pct_home > 30:
+        elif away_cs_pct > 30 and home_failed_pct > 30:
             analysis['defensive_mismatch'] = "Strong away defense vs weak home attack"
             analysis['insights'].append("High clean sheet potential for away team")
         
         # Additional insights
-        if home_stats.clean_sheet_pct_home < 15:
-            analysis['insights'].append(f"Home team rarely keeps clean sheets ({home_stats.clean_sheet_pct_home:.1f}%)")
+        if home_cs_pct < 15:
+            analysis['insights'].append(f"Home team rarely keeps clean sheets ({home_cs_pct:.1f}%)")
         
-        if away_stats.clean_sheet_pct_away < 15:
-            analysis['insights'].append(f"Away team rarely keeps clean sheets ({away_stats.clean_sheet_pct_away:.1f}%)")
+        if away_cs_pct < 15:
+            analysis['insights'].append(f"Away team rarely keeps clean sheets ({away_cs_pct:.1f}%)")
         
         return analysis
     
     def analyze_transition_trends(self, home_stats: EnhancedTeamStats,
                                 away_stats: EnhancedTeamStats) -> Dict:
         """Analyze the Transition dimension"""
+        # Convert to percentages for display
+        home_btts_pct = home_stats.btts_pct_home * 100
+        away_btts_pct = away_stats.btts_pct_away * 100
+        home_over25_pct = home_stats.over25_pct_home * 100
+        away_over25_pct = away_stats.over25_pct_away * 100
+        
         analysis = {
-            'combined_btts': (home_stats.btts_pct_home + away_stats.btts_pct_away) / 2,
-            'combined_over25': (home_stats.over25_pct_home + away_stats.over25_pct_away) / 2,
+            'combined_btts': (home_btts_pct + away_btts_pct) / 2,
+            'combined_over25': (home_over25_pct + away_over25_pct) / 2,
             'home_form_momentum': self._calculate_form_momentum(home_stats),
             'away_form_momentum': self._calculate_form_momentum(away_stats),
             'momentum_difference': None,
@@ -404,31 +457,27 @@ class EdgeFinderPredictor:
         style_key = (home_stats.style, away_stats.style)
         style_adj = self.style_adjustments.get(style_key, self.default_style_adjustment)
         
-        # Base goal expectations (venue-specific)
-        home_games = home_stats.home_wins + home_stats.home_draws + home_stats.home_losses
-        away_games = away_stats.away_wins + away_stats.away_draws + away_stats.away_losses
+        # Base goal expectations from xG (most reliable predictor)
+        lambda_home = home_stats.xg_for_avg
+        lambda_away = away_stats.xg_for_avg
         
-        home_base_gpg = home_stats.home_goals_for / home_games if home_games > 0 else 1.0
-        away_base_gpg = away_stats.away_goals_for / away_games if away_games > 0 else 1.0
+        # Adjust for opponent defense quality
+        lambda_home *= (away_stats.xg_against_avg / context['avg_xg_against'])
+        lambda_away *= (home_stats.xg_against_avg / context['avg_xg_against'])
         
-        home_base_gapg = home_stats.home_goals_against / home_games if home_games > 0 else 1.0
-        away_base_gapg = away_stats.away_goals_against / away_games if away_games > 0 else 1.0
+        # Apply home advantage
+        lambda_home *= (1 + context['home_advantage'])
         
-        # Apply efficiency adjustments
+        # Apply conversion efficiency
         home_conv_adj = home_stats.conversion_rate / context['avg_conversion'] if context['avg_conversion'] > 0 else 1.0
         away_conv_adj = away_stats.conversion_rate / context['avg_conversion'] if context['avg_conversion'] > 0 else 1.0
         
-        # Apply style adjustments
-        home_goals_mult = style_adj['home_goals_mult']
-        away_goals_mult = style_adj['away_goals_mult']
+        lambda_home *= home_conv_adj
+        lambda_away *= away_conv_adj
         
-        # Calculate expected goals
-        lambda_home = (home_base_gpg * home_conv_adj * home_goals_mult * 
-                      (away_base_gapg / context['avg_gapg'] if context['avg_gapg'] > 0 else 1.0) * 
-                      (1 + context['home_advantage']))
-        
-        lambda_away = (away_base_gpg * away_conv_adj * away_goals_mult * 
-                      (home_base_gapg / context['avg_gapg'] if context['avg_gapg'] > 0 else 1.0))
+        # Apply style adjustments (reduced impact)
+        lambda_home *= style_adj['home_goals_mult']
+        lambda_away *= style_adj['away_goals_mult']
         
         # Ensure reasonable bounds
         lambda_home = max(0.2, min(4.0, lambda_home))
@@ -436,24 +485,30 @@ class EdgeFinderPredictor:
         
         total_goals = lambda_home + lambda_away
         
-        # Calculate probabilities
-        prob_over25 = self._poisson_over25(total_goals)
+        # Calculate probabilities with CORRECT Poisson
+        prob_over25 = self._poisson_over25_correct(lambda_home, lambda_away)
         prob_under25 = 1 - prob_over25
         prob_btts = self._poisson_btts(lambda_home, lambda_away)
         prob_no_btts = 1 - prob_btts
         
-        # Win/draw probabilities (simplified)
-        prob_home_win = self._poisson_win_probability(lambda_home, lambda_away)
-        prob_away_win = self._poisson_win_probability(lambda_away, lambda_home)
-        prob_draw = max(0, 1 - prob_home_win - prob_away_win)
+        # Calculate win/draw probabilities using proper Poisson
+        home_win_prob, draw_prob, away_win_prob = self._poisson_match_probabilities(lambda_home, lambda_away)
         
-        # Adjust for draw bias
+        # Apply small biases from style adjustments
+        if style_adj.get('over_bias', 0) > 0:
+            prob_over25 += style_adj['over_bias']
+            prob_under25 = 1 - prob_over25
+        elif style_adj.get('under_bias', 0) > 0:
+            prob_under25 += style_adj['under_bias']
+            prob_over25 = 1 - prob_under25
+        
         if style_adj.get('draw_bias', 0) > 0:
-            prob_draw += style_adj['draw_bias']
-            adjustment = 1 / (prob_home_win + prob_away_win + prob_draw)
-            prob_home_win *= adjustment
-            prob_away_win *= adjustment
-            prob_draw *= adjustment
+            draw_prob += style_adj['draw_bias']
+            # Re-normalize
+            total = home_win_prob + draw_prob + away_win_prob
+            home_win_prob /= total
+            draw_prob /= total
+            away_win_prob /= total
         
         return {
             'lambda_home': lambda_home,
@@ -464,11 +519,11 @@ class EdgeFinderPredictor:
                 'under25': prob_under25,
                 'btts_yes': prob_btts,
                 'btts_no': prob_no_btts,
-                'home_win': prob_home_win,
-                'away_win': prob_away_win,
-                'draw': prob_draw,
-                'home_or_draw': prob_home_win + prob_draw,
-                'away_or_draw': prob_away_win + prob_draw
+                'home_win': home_win_prob,
+                'away_win': away_win_prob,
+                'draw': draw_prob,
+                'home_or_draw': home_win_prob + draw_prob,
+                'away_or_draw': away_win_prob + draw_prob
             },
             'style_adjustment': style_adj,
             'efficiency_adjustments': {
@@ -477,13 +532,16 @@ class EdgeFinderPredictor:
             }
         }
     
-    def _poisson_over25(self, lambda_total: float) -> float:
-        """Calculate probability of Over 2.5 goals using Poisson"""
+    def _poisson_over25_correct(self, lambda_home: float, lambda_away: float) -> float:
+        """Correct probability of Over 2.5 goals using Poisson distribution"""
         try:
-            prob_0 = math.exp(-lambda_total)
-            prob_1 = lambda_total * math.exp(-lambda_total)
-            prob_2 = (lambda_total ** 2) * math.exp(-lambda_total) / 2
-            return 1 - (prob_0 + prob_1 + prob_2)
+            total_lambda = lambda_home + lambda_away
+            # Probability of 0, 1, or 2 goals
+            prob_0 = math.exp(-total_lambda)
+            prob_1 = total_lambda * math.exp(-total_lambda)
+            prob_2 = (total_lambda ** 2) * math.exp(-total_lambda) / 2
+            prob_under25 = prob_0 + prob_1 + prob_2
+            return 1 - prob_under25  # Over 2.5
         except:
             return 0.5
     
@@ -496,22 +554,58 @@ class EdgeFinderPredictor:
         except:
             return 0.5
     
-    def _poisson_win_probability(self, lambda_team: float, lambda_opponent: float) -> float:
-        """Calculate win probability using simplified method"""
+    def _poisson_match_probabilities(self, lambda_home: float, lambda_away: float) -> Tuple[float, float, float]:
+        """Calculate proper win/draw probabilities using Poisson distribution"""
         try:
-            # Simplified win probability based on goal expectation ratio
-            if lambda_team <= 0:
-                return 0.0
+            max_goals = 8  # Reasonable cutoff
+            home_win_prob = 0.0
+            draw_prob = 0.0
+            away_win_prob = 0.0
             
-            ratio = lambda_team / (lambda_team + lambda_opponent) if (lambda_team + lambda_opponent) > 0 else 0.5
+            for i in range(max_goals + 1):  # Home goals
+                prob_home_i = math.exp(-lambda_home) * (lambda_home ** i) / math.factorial(i)
+                
+                for j in range(max_goals + 1):  # Away goals
+                    prob_away_j = math.exp(-lambda_away) * (lambda_away ** j) / math.factorial(j)
+                    
+                    joint_prob = prob_home_i * prob_away_j
+                    
+                    if i > j:
+                        home_win_prob += joint_prob
+                    elif i == j:
+                        draw_prob += joint_prob
+                    else:
+                        away_win_prob += joint_prob
             
-            # Convert ratio to probability (logistic function approximation)
-            prob = 1 / (1 + math.exp(-3 * (ratio - 0.5)))
+            # Normalize (probabilities should sum to 1)
+            total = home_win_prob + draw_prob + away_win_prob
+            if total > 0:
+                home_win_prob /= total
+                draw_prob /= total
+                away_win_prob /= total
             
-            # Ensure reasonable bounds
-            return max(0.1, min(0.9, prob))
+            return home_win_prob, draw_prob, away_win_prob
+            
+        except Exception as e:
+            # Fallback to simplified method
+            print(f"Poisson calculation error: {e}")
+            return self._simple_win_probabilities(lambda_home, lambda_away)
+    
+    def _simple_win_probabilities(self, lambda_home: float, lambda_away: float) -> Tuple[float, float, float]:
+        """Simplified win probability calculation as fallback"""
+        try:
+            if lambda_home <= 0 or lambda_away <= 0:
+                return 0.33, 0.34, 0.33
+            
+            # Basic ratio-based approach
+            home_strength = lambda_home / (lambda_home + lambda_away)
+            draw_prob = 0.25  # Default draw probability
+            home_win_prob = home_strength * (1 - draw_prob)
+            away_win_prob = (1 - home_strength) * (1 - draw_prob)
+            
+            return home_win_prob, draw_prob, away_win_prob
         except:
-            return 0.45
+            return 0.33, 0.34, 0.33
     
     def detect_value_bets(self, model_probs: Dict, market_odds: Dict) -> List[Dict]:
         """Detect value bets across all markets"""
@@ -775,9 +869,9 @@ class EdgeFinderPredictor:
                 self.explanation_templates['style_matchup'].format(
                     style_clash=identity['style_clash'],
                     home_style=home_stats.style.value,
-                    home_possession=home_stats.possession_avg,
+                    home_possession=home_stats.possession_avg * 100,
                     away_style=away_stats.style.value,
-                    away_possession=away_stats.possession_avg,
+                    away_possession=away_stats.possession_avg * 100,
                     insight=identity['insights'][0] if identity['insights'] else "Neutral matchup"
                 )
             )
@@ -787,9 +881,9 @@ class EdgeFinderPredictor:
             explanations.append(
                 self.explanation_templates['efficiency_mismatch'].format(
                     team1=home_stats.team_name,
-                    conv1=home_stats.conversion_rate,
+                    conv1=home_stats.conversion_rate * 100,
                     team2=away_stats.team_name,
-                    conv2=away_stats.conversion_rate,
+                    conv2=away_stats.conversion_rate * 100,
                     insight="Favors more efficient team" if identity['conversion_comparison'] > 0 else "Favors less wasteful team"
                 )
             )
