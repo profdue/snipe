@@ -140,57 +140,40 @@ class EdgeFinderFootballApp:
             if field in team_data:
                 value = team_data[field]
                 
-                # Special handling for percentage fields
-                if field in ['possession_avg', 'conversion_rate', 'clean_sheet_pct', 
-                            'clean_sheet_pct_home', 'clean_sheet_pct_away',
-                            'failed_to_score_pct', 'failed_to_score_pct_home', 'failed_to_score_pct_away',
-                            'btts_pct', 'btts_pct_home', 'btts_pct_away',
-                            'over25_pct', 'over25_pct_home', 'over25_pct_away']:
-                    
-                    if isinstance(value, str):
-                        # Remove % and convert
-                        try:
-                            cleaned = value.replace('%', '').strip()
-                            if cleaned:
-                                data_dict[field] = float(cleaned)
-                            else:
-                                data_dict[field] = 0.0
-                        except:
-                            data_dict[field] = 0.0
-                    elif pd.isna(value):
-                        data_dict[field] = 0.0
-                    else:
-                        data_dict[field] = float(value)
-                        
-                # Handle other fields
-                elif pd.isna(value):
+                # Handle missing values
+                if pd.isna(value):
                     if field_type == str:
                         data_dict[field] = ""
                     elif field_type == int:
                         data_dict[field] = 0
                     else:
                         data_dict[field] = 0.0
-                else:
-                    # Convert to correct type
+                    continue
+                
+                # Handle string conversions
+                if isinstance(value, str):
+                    value = value.strip()
+                
+                # Special handling for each field type
+                if field_type == str:
+                    data_dict[field] = str(value)
+                    
+                elif field_type == int:
                     try:
-                        if field_type == str:
-                            data_dict[field] = str(value)
-                        elif field_type == int:
-                            # Handle floats that should be ints
-                            if isinstance(value, float):
-                                data_dict[field] = int(value)
-                            else:
-                                data_dict[field] = int(float(value))
-                        else:  # float
-                            data_dict[field] = float(value)
-                    except:
-                        # Default on error
-                        if field_type == str:
-                            data_dict[field] = ""
-                        elif field_type == int:
-                            data_dict[field] = 0
+                        # Handle potential float values
+                        if isinstance(value, float):
+                            data_dict[field] = int(value)
                         else:
-                            data_dict[field] = 0.0
+                            data_dict[field] = int(float(str(value)))
+                    except:
+                        data_dict[field] = 0
+                        
+                elif field_type == float:
+                    try:
+                        float_value = float(str(value))
+                        data_dict[field] = float_value
+                    except:
+                        data_dict[field] = 0.0
             else:
                 # Field not in CSV
                 if field_type == str:
@@ -350,6 +333,20 @@ class EdgeFinderFootballApp:
                 away_options = [t for t in team_names if t != home_team]
                 away_team = st.selectbox("✈️ Away Team", away_options)
             
+            # Show team preview
+            if st.checkbox("Show Team Data Preview"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    home_data = teams_df[teams_df['team_name'] == home_team]
+                    if not home_data.empty:
+                        st.write(f"**{home_team} Stats:**")
+                        st.dataframe(home_data.T.head(10), use_container_width=True)
+                with col2:
+                    away_data = teams_df[teams_df['team_name'] == away_team]
+                    if not away_data.empty:
+                        st.write(f"**{away_team} Stats:**")
+                        st.dataframe(away_data.T.head(10), use_container_width=True)
+            
             # Market odds
             st.subheader("💰 Market Odds")
             
@@ -423,8 +420,24 @@ class EdgeFinderFootballApp:
                 home_stats = self.create_team_stats(home_data)
                 away_stats = self.create_team_stats(away_data)
                 
-                # Display team info
+                # Display team info with actual values
                 st.info(f"**Analyzing:** {home_team} vs {away_team}")
+                
+                # Show key stats for verification
+                with st.expander("📊 Verify Team Data"):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write(f"**{home_team} Key Stats:**")
+                        st.write(f"- xG For: {home_stats.xg_for_avg:.2f}")
+                        st.write(f"- xG Against: {home_stats.xg_against_avg:.2f}")
+                        st.write(f"- Conversion Rate: {home_stats.conversion_rate:.1%}")
+                        st.write(f"- Possession: {home_stats.possession_avg:.1%}")
+                    with col2:
+                        st.write(f"**{away_team} Key Stats:**")
+                        st.write(f"- xG For: {away_stats.xg_for_avg:.2f}")
+                        st.write(f"- xG Against: {away_stats.xg_against_avg:.2f}")
+                        st.write(f"- Conversion Rate: {away_stats.conversion_rate:.1%}")
+                        st.write(f"- Possession: {away_stats.possession_avg:.1%}")
                 
                 # Run prediction
                 with st.spinner("Analyzing match using '3 Things' framework..."):
@@ -441,7 +454,7 @@ class EdgeFinderFootballApp:
                 
             except Exception as e:
                 st.error(f"Error analyzing match: {str(e)}")
-                st.code(f"Traceback: {e}", language="python")
+                st.exception(e)  # Show full traceback for debugging
         else:
             self.display_welcome_screen()
     
@@ -517,9 +530,9 @@ class EdgeFinderFootballApp:
             st.markdown(f"""
             <div class="team-stat-box">
                 <p><strong>Style:</strong> {self.get_team_style_icon(home_stats.style.value)} {home_stats.style.value}</p>
-                <p><strong>Possession:</strong> {home_stats.possession_avg:.1f}%</p>
-                <p><strong>Conversion:</strong> {home_stats.conversion_rate:.1f}%</p>
-                <p><strong>Clean Sheets:</strong> {home_stats.clean_sheet_pct:.1f}%</p>
+                <p><strong>Possession:</strong> {home_stats.possession_avg:.1%}</p>
+                <p><strong>Conversion:</strong> {home_stats.conversion_rate:.1%}</p>
+                <p><strong>Clean Sheets:</strong> {home_stats.clean_sheet_pct:.1%}</p>
                 <p><strong>Form:</strong> {home_stats.last5_form}</p>
             </div>
             """, unsafe_allow_html=True)
@@ -529,9 +542,9 @@ class EdgeFinderFootballApp:
             st.markdown(f"""
             <div class="team-stat-box">
                 <p><strong>Style:</strong> {self.get_team_style_icon(away_stats.style.value)} {away_stats.style.value}</p>
-                <p><strong>Possession:</strong> {away_stats.possession_avg:.1f}%</p>
-                <p><strong>Conversion:</strong> {away_stats.conversion_rate:.1f}%</p>
-                <p><strong>Clean Sheets:</strong> {away_stats.clean_sheet_pct:.1f}%</p>
+                <p><strong>Possession:</strong> {away_stats.possession_avg:.1%}</p>
+                <p><strong>Conversion:</strong> {away_stats.conversion_rate:.1%}</p>
+                <p><strong>Clean Sheets:</strong> {away_stats.clean_sheet_pct:.1%}</p>
                 <p><strong>Form:</strong> {away_stats.last5_form}</p>
             </div>
             """, unsafe_allow_html=True)
@@ -657,9 +670,10 @@ class EdgeFinderFootballApp:
         ### 💰 How We Find Value
         
         Our system calculates **true probabilities** using:
+        - **xG (Expected Goals)** as primary predictor
         - Style-based goal expectation adjustments
         - Efficiency-weighted metrics  
-        - Poisson distribution modeling
+        - Correct Poisson distribution modeling
         - League-context aware adjustments
         
         We only recommend bets where: **P_model - P_market > Minimum Edge**
