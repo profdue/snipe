@@ -1,5 +1,3 @@
-# Create this file as: models/edgefinder_predictor.py
-
 import numpy as np
 import math
 import pandas as pd
@@ -77,11 +75,69 @@ class EnhancedTeamStats:
     last5_goals_for: int
     last5_goals_against: int
     
-    # Optional fields with defaults
     def __post_init__(self):
-        # Ensure all float fields have values
-        for field in self.__dataclass_fields__:
-            if isinstance(getattr(self, field), float) and np.isnan(getattr(self, field)):
+        """Handle percentage strings and other data cleaning"""
+        # Convert percentage strings to floats for ALL percentage fields
+        percentage_fields = [
+            'possession_avg', 'conversion_rate', 
+            'clean_sheet_pct', 'clean_sheet_pct_home', 'clean_sheet_pct_away',
+            'failed_to_score_pct', 'failed_to_score_pct_home', 'failed_to_score_pct_away',
+            'btts_pct', 'btts_pct_home', 'btts_pct_away',
+            'over25_pct', 'over25_pct_home', 'over25_pct_away'
+        ]
+        
+        for field in percentage_fields:
+            value = getattr(self, field)
+            if isinstance(value, str):
+                # Remove % sign and convert to float
+                try:
+                    # Handle "6%" -> 6.0, "13%" -> 13.0
+                    cleaned = value.replace('%', '').strip()
+                    if cleaned:  # Check if not empty
+                        setattr(self, field, float(cleaned))
+                    else:
+                        setattr(self, field, 0.0)
+                except (ValueError, AttributeError):
+                    setattr(self, field, 0.0)
+            elif value is None or (isinstance(value, float) and np.isnan(value)):
+                setattr(self, field, 0.0)
+        
+        # Handle form string
+        if not self.last5_form or (isinstance(self.last5_form, float) and np.isnan(self.last5_form)):
+            self.last5_form = ""
+        
+        # Ensure numeric fields are proper types
+        int_fields = [
+            'matches_played', 'home_wins', 'home_draws', 'home_losses',
+            'away_wins', 'away_draws', 'away_losses', 'home_goals_for',
+            'home_goals_against', 'away_goals_for', 'away_goals_against',
+            'last5_wins', 'last5_draws', 'last5_losses', 'last5_goals_for',
+            'last5_goals_against'
+        ]
+        
+        for field in int_fields:
+            value = getattr(self, field)
+            if isinstance(value, str):
+                try:
+                    setattr(self, field, int(float(value)))
+                except:
+                    setattr(self, field, 0)
+            elif value is None or (isinstance(value, float) and np.isnan(value)):
+                setattr(self, field, 0)
+        
+        # Ensure float fields are proper types
+        float_fields = [
+            'shots_per_game', 'shots_on_target_pg', 'xg_for_avg', 'xg_against_avg'
+        ]
+        
+        for field in float_fields:
+            value = getattr(self, field)
+            if isinstance(value, str):
+                try:
+                    setattr(self, field, float(value))
+                except:
+                    setattr(self, field, 0.0)
+            elif value is None or (isinstance(value, float) and np.isnan(value)):
                 setattr(self, field, 0.0)
     
     @property
@@ -92,13 +148,14 @@ class EnhancedTeamStats:
     @property
     def style(self) -> TeamStyle:
         """Determine team playing style based on metrics"""
+        # Handle cases where possession_avg might be 0 due to parsing issues
         if self.possession_avg >= 55:
             return TeamStyle.POSSESSION
-        elif self.possession_avg <= 45:
+        elif self.possession_avg <= 45 and self.possession_avg > 0:  # > 0 to avoid default
             return TeamStyle.COUNTER
         elif self.shots_per_game >= 15:
             return TeamStyle.HIGH_PRESS
-        elif self.shots_per_game <= 8:
+        elif self.shots_per_game <= 8 and self.shots_per_game > 0:
             return TeamStyle.LOW_BLOCK
         else:
             return TeamStyle.BALANCED
@@ -779,9 +836,3 @@ class EdgeFinderPredictor:
             insights.append(f"{away_stats.team_name} in improving form")
         
         return insights
-
-
-# For backward compatibility
-def create_team_stats_from_dict(data: dict) -> EnhancedTeamStats:
-    """Helper function to create EnhancedTeamStats from dictionary"""
-    return EnhancedTeamStats(**data)
