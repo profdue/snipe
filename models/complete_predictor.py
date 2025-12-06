@@ -35,26 +35,27 @@ class TeamStats:
     last10_away_gpg: float
     last10_away_gapg: float
 
-class KalmanHybridPredictor:
+class CompletePhantomPredictor:
     """
-    Mathematically Optimal Hybrid Predictor using:
-    1. Kalman Filter for optimal Last5/Last10 fusion
-    2. Bayesian inference for probability calculation
-    3. Pure Python/Numpy implementations (no scipy dependency)
+    Complete v5.0 Football Predictor with:
+    - Kalman Filter for optimal Last5/Last10 fusion
+    - Bayesian probability calculation
+    - Hybrid decision system
+    - Kelly staking with confidence weighting
     """
     
     def __init__(self, bankroll: float = 1000.0, min_confidence: float = 0.60):
         self.bankroll = bankroll
         self.min_confidence = min_confidence
         
-        # League-specific parameters
-        self.league_params = {
-            'premier_league': {'avg_total': 2.8, 'home_adv': 0.15, 'over_freq': 0.48},
-            'la_liga': {'avg_total': 2.6, 'home_adv': 0.18, 'over_freq': 0.45},
-            'bundesliga': {'avg_total': 3.1, 'home_adv': 0.12, 'over_freq': 0.52},
-            'serie_a': {'avg_total': 2.5, 'home_adv': 0.20, 'over_freq': 0.43},
-            'ligue_1': {'avg_total': 2.7, 'home_adv': 0.16, 'over_freq': 0.47},
-            'default': {'avg_total': 2.7, 'home_adv': 0.16, 'over_freq': 0.47}
+        # League context
+        self.league_context = {
+            'premier_league': {'avg_gpg': 2.8, 'avg_gapg': 2.8, 'home_advantage': 0.15},
+            'la_liga': {'avg_gpg': 2.6, 'avg_gapg': 2.6, 'home_advantage': 0.18},
+            'bundesliga': {'avg_gpg': 3.1, 'avg_gapg': 3.1, 'home_advantage': 0.12},
+            'serie_a': {'avg_gpg': 2.5, 'avg_gapg': 2.5, 'home_advantage': 0.20},
+            'ligue_1': {'avg_gpg': 2.7, 'avg_gapg': 2.7, 'home_advantage': 0.16},
+            'default': {'avg_gpg': 2.7, 'avg_gapg': 2.7, 'home_advantage': 0.16}
         }
         
         # Kalman Filter parameters
@@ -65,11 +66,11 @@ class KalmanHybridPredictor:
             'initial_variance': 0.5
         }
         
-        # Bayesian prior parameters
+        # Bayesian parameters
         self.prior_over = 0.47
         self.prior_under = 0.53
         
-        # Likelihood parameters
+        # Likelihood parameters (empirical)
         self.likelihoods = {
             'over': {
                 'last5_mean': 2.15,
@@ -85,26 +86,48 @@ class KalmanHybridPredictor:
             }
         }
         
-        # Trend detection
-        self.trend_filter = np.array([0.05, 0.1, 0.15, 0.25, 0.45])
-        self.momentum_threshold = 0.15
+        # Thresholds (adjusted for Kalman output)
+        self.over_threshold = 1.5
+        self.under_threshold_defense = 1.0
+        self.under_threshold_attack = 1.5
         
         # Betting parameters
         self.kelly_fraction = 0.25
         self.max_stake_pct = 0.05
         
-    # ==================== CORE MATHEMATICAL METHODS ====================
+        # Explanation templates
+        self._init_explanation_templates()
+        
+    def _init_explanation_templates(self):
+        """Initialize explanation templates"""
+        self.explanation_templates = {
+            1: (
+                "High Confidence {prediction}: Kalman optimal estimate shows {total_goals:.2f} total goals "
+                "with strong momentum. Last5: {last5_contribution:.2f}, Last10: {last10_contribution:.2f}. "
+                "Edge: {edge:.1f}%."
+            ),
+            2: (
+                "Moderate Confidence {prediction}: Bayesian probability {probability:.1%} with "
+                "Kalman confidence {confidence:.2f}. Expected goals: {total_goals:.2f}. "
+                "Edge: {edge:.1f}%."
+            ),
+            3: (
+                "Low Confidence {prediction}: Statistical edge detected but weak signal. "
+                "Expected goals: {total_goals:.2f}. Kalman variance: {variance:.3f}. "
+                "Edge: {edge:.1f}%."
+            )
+        }
+    
+    def poisson_pmf(self, k: int, lambd: float) -> float:
+        """Calculate Poisson probability mass function"""
+        return (lambd ** k * math.exp(-lambd)) / math.factorial(k)
     
     def normal_pdf(self, x: float, mean: float, std: float) -> float:
-        """Pure Python implementation of normal PDF (replaces scipy.stats.norm.pdf)"""
+        """Normal probability density function"""
         if std <= 0:
             return 0.0
         exponent = -((x - mean) ** 2) / (2 * std ** 2)
         return (1.0 / (std * np.sqrt(2 * np.pi))) * np.exp(exponent)
-    
-    def poisson_pmf(self, k: int, lambd: float) -> float:
-        """Pure Python implementation of Poisson PMF"""
-        return (lambd ** k * math.exp(-lambd)) / math.factorial(k)
     
     def kalman_update(self, prior_mean: float, prior_var: float, 
                      measurement: float, measurement_var: float) -> Tuple[float, float]:
@@ -123,72 +146,211 @@ class KalmanHybridPredictor:
         
         return updated_mean, updated_var
     
-    def kalman_predict_goals(self, home_stats: TeamStats, away_stats: TeamStats, 
-                           league: str = "default") -> Dict[str, float]:
-        """
-        Optimal fusion of Last 5 and Last 10 data using Kalman Filter
-        """
-        params = self.league_params.get(league, self.league_params['default'])
+    def _calculate_form_momentum(self, last5_value: float, last10_value: float) -> Tuple[str, float]:
+        """Detect if team is improving or declining"""
+        if last10_value == 0:
+            return "stable", 1.0
+            
+        ratio = last5_value / last10_value
         
-        # Start with league average as prior
-        prior_mean = params['avg_total']
+        if ratio > 1.15:
+            return "improving", 1.1
+        elif ratio < 0.85:
+            return "declining", 0.9
+        return "stable", 1.0
+    
+    def _prepare_stats_for_prediction(self, home_stats: TeamStats, away_stats: TeamStats, 
+                                    league: str = "default") -> Dict:
+        """Prepare statistics with Kalman optimal fusion"""
+        context = self.league_context.get(league, self.league_context['default'])
+        
+        # Kalman optimal fusion of Last5 and Last10
+        prior_mean = context['avg_gpg']
         prior_var = self.kalman_params['initial_variance']
         
-        # Add process noise
+        # Process noise
         prior_var += self.kalman_params['process_variance']
         
-        # Measurement 1: Last 10 games
-        last10_measurement = ((home_stats.last10_home_gpg + away_stats.last10_away_gpg) / 2) * 2
-        last10_measurement = max(0.5, min(5.0, last10_measurement))
+        # Home team: Fusion of home stats
+        home_last10 = home_stats.last10_home_gpg
+        home_last5 = home_stats.last5_home_gpg
         
-        # Update with Last 10 data
-        posterior_mean, posterior_var = self.kalman_update(
+        # Away team: Fusion of away stats
+        away_last10 = away_stats.last10_away_gpg
+        away_last5 = away_stats.last5_away_gpg
+        
+        # Apply Kalman filter to home stats
+        home_posterior, home_var = self.kalman_update(
             prior_mean, prior_var,
-            last10_measurement, self.kalman_params['measurement_variance_last10']
+            home_last10, self.kalman_params['measurement_variance_last10']
+        )
+        home_final, home_final_var = self.kalman_update(
+            home_posterior, home_var,
+            home_last5, self.kalman_params['measurement_variance_last5']
         )
         
-        # Measurement 2: Last 5 games
-        last5_measurement = ((home_stats.last5_home_gpg + away_stats.last5_away_gpg) / 2) * 2
-        last5_measurement = max(0.5, min(5.0, last5_measurement))
-        
-        # Update with Last 5 data
-        final_mean, final_var = self.kalman_update(
-            posterior_mean, posterior_var,
-            last5_measurement, self.kalman_params['measurement_variance_last5']
+        # Apply Kalman filter to away stats
+        away_posterior, away_var = self.kalman_update(
+            prior_mean, prior_var,
+            away_last10, self.kalman_params['measurement_variance_last10']
+        )
+        away_final, away_final_var = self.kalman_update(
+            away_posterior, away_var,
+            away_last5, self.kalman_params['measurement_variance_last5']
         )
         
-        # Calculate home/away breakdown
-        home_share = 0.5 + params['home_adv'] / 2
-        home_goals = final_mean * home_share
-        away_goals = final_mean * (1 - home_share)
+        # Calculate momentum
+        home_momentum, home_momentum_mult = self._calculate_form_momentum(
+            home_last5, home_last10
+        )
+        away_momentum, away_momentum_mult = self._calculate_form_momentum(
+            away_last5, away_last10
+        )
+        
+        # Apply momentum adjustments
+        home_final_adj = home_final * home_momentum_mult
+        away_final_adj = away_final * away_momentum_mult
+        
+        # xG hybrid (60/40)
+        home_xg_hybrid = 0.6 * home_final_adj + 0.4 * home_stats.avg_xg_for
+        away_xg_hybrid = 0.6 * away_final_adj + 0.4 * away_stats.avg_xg_for
+        
+        # Final estimates
+        home_attack_final = 0.5 * home_final_adj + 0.5 * home_xg_hybrid
+        away_attack_final = 0.5 * away_final_adj + 0.5 * away_xg_hybrid
+        
+        # Defense estimates
+        home_defense_final = home_stats.last10_home_gapg * 0.6 + home_stats.avg_xg_against * 0.4
+        away_defense_final = away_stats.last10_away_gapg * 0.6 + away_stats.avg_xg_against * 0.4
         
         return {
-            'total_goals': final_mean,
-            'home_goals': home_goals,
-            'away_goals': away_goals,
-            'variance': final_var,
-            'confidence': 1.0 / (final_var + 0.01),
-            'last5_contribution': last5_measurement,
-            'last10_contribution': last10_measurement
+            'home_attack': home_attack_final,
+            'away_attack': away_attack_final,
+            'home_defense': home_defense_final,
+            'away_defense': away_defense_final,
+            'home_momentum': home_momentum,
+            'away_momentum': away_momentum,
+            'home_momentum_mult': home_momentum_mult,
+            'away_momentum_mult': away_momentum_mult,
+            'home_last5': home_last5,
+            'home_last10': home_last10,
+            'away_last5': away_last5,
+            'away_last10': away_last10,
+            'home_xg': home_stats.avg_xg_for,
+            'away_xg': away_stats.avg_xg_for,
+            'league_context': context,
+            'kalman_home': home_final,
+            'kalman_away': away_final,
+            'kalman_home_var': home_final_var,
+            'kalman_away_var': away_final_var
         }
     
-    def bayesian_probability(self, kalman_result: Dict[str, float]) -> Tuple[float, float]:
+    def _apply_five_rules(self, stats: Dict) -> Tuple[str, str, int, float]:
         """
-        Calculate P(Over|Data) using Bayes' Theorem with Kalman output
+        Enhanced 5-rule system with Kalman optimal estimates
         """
-        total_goals = kalman_result['total_goals']
-        confidence = kalman_result['confidence']
+        # Extract Kalman optimal estimates
+        home_attack = stats['home_attack']
+        away_attack = stats['away_attack']
+        home_defense = stats['home_defense']
+        away_defense = stats['away_defense']
         
-        # Calculate likelihoods using our normal_pdf function
-        like_over = self.normal_pdf(total_goals, 
+        # Rule 1: High Confidence Over (Both Kalman estimates > threshold)
+        rule1_condition = (
+            home_attack > self.over_threshold and
+            away_attack > self.over_threshold and
+            stats['home_last5'] > self.over_threshold and
+            stats['away_last5'] > self.over_threshold
+        )
+        
+        if rule1_condition:
+            confidence_boost = 0.05 if (stats['home_momentum'] == "improving" or 
+                                       stats['away_momentum'] == "improving") else 0
+            return "Over 2.5", "High", 1, confidence_boost
+        
+        # Rule 2: High Confidence Under (Strong Kalman defense vs weak attack)
+        rule2_condition = (
+            home_defense < self.under_threshold_defense and
+            away_attack < self.under_threshold_attack and
+            stats['home_last5_gapg'] < self.under_threshold_defense and
+            stats['away_last5'] < self.under_threshold_attack
+        )
+        
+        if rule2_condition:
+            confidence_boost = 0.05 if (stats['home_momentum'] == "improving" or 
+                                       stats['away_momentum'] == "declining") else 0
+            return "Under 2.5", "High", 2, confidence_boost
+        
+        # Rule 3: Moderate Confidence Over (Kalman estimate > threshold)
+        rule3_condition = (
+            home_attack > self.over_threshold and
+            away_attack > self.over_threshold
+        )
+        
+        if rule3_condition:
+            momentum_bonus = 0.03 if (stats['home_momentum'] == "improving" or 
+                                     stats['away_momentum'] == "improving") else 0
+            return "Over 2.5", "Moderate", 3, momentum_bonus
+        
+        # Rule 4: Moderate Confidence Under (Kalman defense strong)
+        rule4_condition = (
+            home_defense < self.under_threshold_defense and
+            away_attack < self.under_threshold_attack
+        )
+        
+        if rule4_condition:
+            momentum_bonus = 0.03 if (stats['home_momentum'] == "improving" or 
+                                     stats['away_momentum'] == "declining") else 0
+            return "Under 2.5", "Moderate", 4, momentum_bonus
+        
+        # Rule 5: Bayesian/Kalman edge detection
+        total_goals = home_attack + away_attack
+        if total_goals > 2.8:  # High expected goals
+            return "Over 2.5", "Low", 5, 0
+        elif total_goals < 2.2:  # Low expected goals
+            return "Under 2.5", "Low", 5, 0
+        
+        return "No Bet", "None", 5, 0
+    
+    def _calculate_poisson_probabilities(self, stats: Dict) -> Tuple[float, float, float, Dict]:
+        """Calculate Poisson probabilities with Kalman optimal estimates"""
+        
+        context = stats['league_context']
+        
+        # Use Kalman optimal estimates
+        lambda_home = (stats['home_attack'] * 
+                      (stats['away_defense'] / context['avg_gapg']) * 
+                      (1 + context['home_advantage']))
+        
+        lambda_away = (stats['away_attack'] * 
+                      (stats['home_defense'] / context['avg_gapg']))
+        
+        expected_goals = lambda_home + lambda_away
+        
+        # Calculate Poisson probabilities
+        prob_under = sum(self.poisson_pmf(k, expected_goals) for k in range(3))
+        prob_over = 1 - prob_under
+        
+        return expected_goals, prob_over, prob_under, {
+            'lambda_home': lambda_home,
+            'lambda_away': lambda_away,
+            'home_momentum': stats['home_momentum'],
+            'away_momentum': stats['away_momentum']
+        }
+    
+    def _bayesian_probability(self, expected_goals: float) -> Tuple[float, float]:
+        """Bayesian probability calculation"""
+        # Likelihood of data given Over
+        like_over = self.normal_pdf(expected_goals,
                                   self.likelihoods['over']['last10_mean'],
-                                  self.likelihoods['over']['last10_std'] / np.sqrt(confidence))
+                                  self.likelihoods['over']['last10_std'])
         
-        like_under = self.normal_pdf(total_goals,
+        # Likelihood of data given Under
+        like_under = self.normal_pdf(expected_goals,
                                    self.likelihoods['under']['last10_mean'],
-                                   self.likelihoods['under']['last10_std'] / np.sqrt(confidence))
+                                   self.likelihoods['under']['last10_std'])
         
-        # Apply Bayes' Theorem
+        # Bayesian update
         evidence = like_over * self.prior_over + like_under * self.prior_under
         
         if evidence == 0:
@@ -196,361 +358,234 @@ class KalmanHybridPredictor:
         else:
             prob_over = (like_over * self.prior_over) / evidence
         
-        # Adjust for confidence
-        prob_over = self._confidence_adjust(prob_over, confidence)
-        
         return prob_over, 1 - prob_over
     
-    def _confidence_adjust(self, probability: float, confidence: float) -> float:
-        """Adjust probability based on confidence level"""
-        if confidence > 1.5:  # High confidence
-            if probability > 0.5:
-                adjusted = 0.5 + (probability - 0.5) * 1.2
-            else:
-                adjusted = 0.5 - (0.5 - probability) * 1.2
-        elif confidence > 1.0:  # Moderate confidence
-            if probability > 0.5:
-                adjusted = 0.5 + (probability - 0.5) * 1.1
-            else:
-                adjusted = 0.5 - (0.5 - probability) * 1.1
-        else:  # Low confidence
-            adjusted = 0.5 + (probability - 0.5) * 0.8
-        
-        return max(0.01, min(0.99, adjusted))
-    
-    def detect_trend_momentum(self, home_stats: TeamStats, away_stats: TeamStats) -> Dict[str, Any]:
-        """
-        Detect trends using simple moving averages (no scipy dependency)
-        """
-        # Simple momentum calculation
-        home_last5 = home_stats.last5_home_gpg
-        home_last10 = home_stats.last10_home_gpg
-        away_last5 = away_stats.last5_away_gpg
-        away_last10 = away_stats.last10_away_gpg
-        
-        # Calculate momentum (change from last10 to last5)
-        home_momentum = (home_last5 - home_last10) / max(0.1, home_last10)
-        away_momentum = (away_last5 - away_last10) / max(0.1, away_last10)
-        
-        # Determine trend direction
-        home_trend = "improving" if home_momentum > self.momentum_threshold else \
-                    "declining" if home_momentum < -self.momentum_threshold else "stable"
-        
-        away_trend = "improving" if away_momentum > self.momentum_threshold else \
-                    "declining" if away_momentum < -self.momentum_threshold else "stable"
-        
-        # Simple consistency measure
-        home_consistency = 1.0 / (abs(home_last5 - home_last10) + 0.1)
-        away_consistency = 1.0 / (abs(away_last5 - away_last10) + 0.1)
-        
-        return {
-            'home_momentum': home_momentum,
-            'away_momentum': away_momentum,
-            'home_trend': home_trend,
-            'away_trend': away_trend,
-            'home_consistency': home_consistency,
-            'away_consistency': away_consistency,
-            'total_momentum': home_momentum + away_momentum,
-            'trend_score': (home_momentum + away_momentum) * 
-                          (home_consistency + away_consistency) / 2
-        }
-    
-    # ==================== PREDICTION DECISION SYSTEM ====================
-    
-    def hybrid_decision_system(self, prob_over: float, prob_under: float,
-                             kalman_result: Dict[str, float],
-                             trend_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Make final prediction decision using hybrid criteria
-        """
-        total_goals = kalman_result['total_goals']
-        confidence = kalman_result['confidence']
-        trend_score = trend_data['trend_score']
-        
-        # Calculate decision score (0-100)
-        decision_score = 0
-        
-        # Component 1: Probability strength (40 points max)
-        prob_diff = abs(prob_over - 0.5)
-        decision_score += min(40, prob_diff * 80)
-        
-        # Component 2: Kalman confidence (30 points max)
-        decision_score += min(30, (confidence - 0.5) * 60)
-        
-        # Component 3: Trend momentum (20 points max)
-        if trend_score > 0.3:
-            decision_score += 20
-        elif trend_score > 0.15:
-            decision_score += 10
-        elif trend_score < -0.3:
-            decision_score -= 10
-        
-        # Component 4: Goal expectation (10 points max)
-        if total_goals > 3.0:
-            decision_score += 10 if prob_over > 0.5 else -5
-        elif total_goals < 2.0:
-            decision_score += 10 if prob_under > 0.5 else -5
-        
-        # Normalize score
-        decision_score = max(0, min(100, decision_score))
-        
-        # Determine prediction
-        if prob_over > prob_under:
-            prediction = "OVER 2.5"
-            base_prob = prob_over
-        else:
-            prediction = "UNDER 2.5"
-            base_prob = prob_under
-        
-        # Set confidence levels
-        if decision_score >= 70:
-            confidence_level = "HIGH"
-            kelly_mult = 1.0
-        elif decision_score >= 50:
-            confidence_level = "MODERATE"
-            kelly_mult = 0.7
-        elif decision_score >= 30:
-            confidence_level = "LOW"
-            kelly_mult = 0.4
-        else:
-            confidence_level = "NO BET"
-            kelly_mult = 0.0
-            
-        # Apply trend-based probability adjustment
-        if trend_data['total_momentum'] > 0.2 and prediction == "OVER 2.5":
-            base_prob = min(0.95, base_prob * 1.1)
-        elif trend_data['total_momentum'] < -0.2 and prediction == "UNDER 2.5":
-            base_prob = min(0.95, base_prob * 1.1)
-        
-        return {
-            'prediction': prediction,
-            'probability': base_prob,
-            'confidence': confidence_level,
-            'decision_score': decision_score,
-            'kelly_multiplier': kelly_mult,
-            'expected_goals': total_goals,
-            'kalman_confidence': confidence,
-            'trend_score': trend_score
-        }
-    
-    # ==================== BETTING & STAKING ====================
-    
-    def calculate_optimal_stake(self, probability: float, odds: float, 
-                              confidence_mult: float, bankroll: float = None) -> Dict[str, float]:
-        """
-        Calculate optimal stake using fractional Kelly
-        """
+    def calculate_kelly_stake(self, probability: float, odds: float, confidence: str, 
+                             bankroll: float = None) -> Dict:
+        """Fractional Kelly staking with confidence weighting"""
         if bankroll is None:
             bankroll = self.bankroll
-            
-        # Calculate edge
-        implied_prob = 1.0 / odds if odds > 0 else 0
-        edge = probability - implied_prob
         
-        if edge <= 0 or probability <= implied_prob:
+        confidence_map = {"High": 0.8, "Moderate": 0.65, "Low": 0.55, "None": 0.0}
+        confidence_value = confidence_map.get(confidence, 0.5)
+        
+        if confidence_value < self.min_confidence:
             return {
                 'stake_amount': 0.0,
                 'stake_percent': 0.0,
                 'kelly_fraction': 0.0,
                 'expected_value': 0.0,
-                'edge_percent': edge * 100,
-                'value_rating': 'NO VALUE',
-                'implied_probability': implied_prob,
-                'true_probability': probability
+                'risk_level': 'No Bet',
+                'edge_percent': 0.0,
+                'value_rating': 'None',
+                'implied_probability': 1 / odds if odds > 0 else 0.0
             }
         
-        # Kelly Criterion
+        implied_prob = 1 / odds if odds > 0 else 0.0
+        edge = probability - implied_prob
+        
+        if edge <= 0:
+            return {
+                'stake_amount': 0.0,
+                'stake_percent': 0.0,
+                'kelly_fraction': 0.0,
+                'expected_value': 0.0,
+                'risk_level': 'No Value',
+                'edge_percent': edge * 100,
+                'value_rating': 'Poor',
+                'implied_probability': implied_prob
+            }
+        
+        # Kelly formula
         b = odds - 1
         p = probability
         q = 1 - p
         
-        kelly_fraction = (b * p - q) / b
+        if b <= 0:
+            kelly_fraction = 0.0
+        else:
+            kelly_fraction = (b * p - q) / b
         
-        # Apply fractional Kelly and confidence multiplier
-        fractional_kelly = max(0, kelly_fraction) * self.kelly_fraction * confidence_mult
+        # Apply fractional Kelly and confidence weighting
+        fractional_kelly = max(0, kelly_fraction) * self.kelly_fraction * confidence_value
         
         # Calculate stake
         stake_amount = fractional_kelly * bankroll
         
-        # Apply maximum stake limit
+        # Cap at reasonable levels
         max_stake = bankroll * self.max_stake_pct
         stake_amount = min(stake_amount, max_stake)
         
         # Calculate expected value
-        ev_win = stake_amount * (odds - 1) * p
-        ev_loss = stake_amount * q
-        expected_value = ev_win - ev_loss
+        expected_value = (probability * (stake_amount * (odds - 1))) - ((1 - probability) * stake_amount)
+        
+        # Determine risk level
+        if fractional_kelly > 0.1:
+            risk_level = "High"
+        elif fractional_kelly > 0.05:
+            risk_level = "Medium"
+        elif fractional_kelly > 0:
+            risk_level = "Low"
+        else:
+            risk_level = "No Bet"
         
         # Determine value rating
-        if edge > 0.15:
-            value_rating = "EXCELLENT"
-        elif edge > 0.10:
-            value_rating = "VERY GOOD"
+        if edge > 0.1:
+            value_rating = "Excellent"
         elif edge > 0.05:
-            value_rating = "GOOD"
+            value_rating = "Good"
         elif edge > 0.02:
-            value_rating = "FAIR"
+            value_rating = "Fair"
         else:
-            value_rating = "POOR"
+            value_rating = "Poor"
         
         return {
             'stake_amount': stake_amount,
             'stake_percent': stake_amount / bankroll,
             'kelly_fraction': fractional_kelly,
             'expected_value': expected_value,
+            'risk_level': risk_level,
             'edge_percent': edge * 100,
             'value_rating': value_rating,
-            'implied_probability': implied_prob,
-            'true_probability': probability
+            'implied_probability': implied_prob
         }
     
-    # ==================== MAIN PREDICTION METHOD ====================
-    
-    def predict_match(self, home_stats: TeamStats, away_stats: TeamStats,
-                     over_odds: float, under_odds: float,
-                     league: str = "default", bankroll: float = None) -> Dict[str, Any]:
+    def predict_match(self, home_stats: TeamStats, away_stats: TeamStats, 
+                     over_odds: float, under_odds: float, 
+                     league: str = "default", bankroll: float = None) -> Dict:
         """
-        Complete prediction pipeline
+        Complete prediction for a single match
+        
+        Args:
+            home_stats: Home team statistics
+            away_stats: Away team statistics
+            over_odds: Market odds for Over 2.5
+            under_odds: Market odds for Under 2.5
+            league: League name for context
+            bankroll: Current bankroll (overrides instance bankroll)
+        
+        Returns:
+            Complete prediction dictionary
         """
         if bankroll is None:
             bankroll = self.bankroll
         
-        # 1. Kalman Filter optimal fusion
-        kalman_result = self.kalman_predict_goals(home_stats, away_stats, league)
+        # Prepare stats with Kalman optimal fusion
+        stats = self._prepare_stats_for_prediction(home_stats, away_stats, league)
         
-        # 2. Bayesian probability calculation
-        prob_over, prob_under = self.bayesian_probability(kalman_result)
+        # Apply rules
+        prediction, confidence, rule_number, confidence_boost = self._apply_five_rules(stats)
         
-        # 3. Trend detection
-        trend_data = self.detect_trend_momentum(home_stats, away_stats)
+        # Calculate Poisson probabilities
+        expected_goals, prob_over, prob_under, poisson_details = self._calculate_poisson_probabilities(stats)
         
-        # 4. Hybrid decision system
-        decision = self.hybrid_decision_system(prob_over, prob_under, kalman_result, trend_data)
+        # Calculate Bayesian probabilities
+        bayesian_over, bayesian_under = self._bayesian_probability(expected_goals)
         
-        # 5. If no bet, return early
-        if decision['confidence'] == "NO BET":
-            return {
-                'prediction': 'NO BET',
-                'confidence': 'NO BET',
-                'probability': max(prob_over, prob_under),
-                'expected_goals': kalman_result['total_goals'],
-                'explanation': self._generate_no_bet_explanation(kalman_result, trend_data),
-                'staking_info': {'stake_amount': 0.0, 'edge_percent': 0.0},
-                'analysis': {
-                    'kalman_result': kalman_result,
-                    'trend_data': trend_data,
-                    'prob_over': prob_over,
-                    'prob_under': prob_under
-                }
-            }
+        # Combine Poisson and Bayesian (weighted average)
+        combined_over = 0.6 * prob_over + 0.4 * bayesian_over
+        combined_under = 0.6 * prob_under + 0.4 * bayesian_under
         
-        # 6. Determine market odds
-        if decision['prediction'] == "OVER 2.5":
-            market_odds = over_odds
-            probability = prob_over
+        # Determine final probability
+        if prediction == "Over 2.5":
+            base_probability = combined_over
+            market_odd = over_odds
+        elif prediction == "Under 2.5":
+            base_probability = combined_under
+            market_odd = under_odds
         else:
-            market_odds = under_odds
-            probability = prob_under
+            base_probability = max(combined_over, combined_under)
+            market_odd = 2.0
         
-        # 7. Calculate optimal stake
-        staking_info = self.calculate_optimal_stake(
-            probability=probability,
-            odds=market_odds,
-            confidence_mult=decision['kelly_multiplier'],
+        # Apply confidence boost
+        final_probability = min(0.95, base_probability + confidence_boost)
+        
+        # Calculate stake
+        staking_info = self.calculate_kelly_stake(
+            probability=final_probability,
+            odds=market_odd,
+            confidence=confidence,
             bankroll=bankroll
         )
         
-        # 8. Generate explanation
+        # Generate explanation
         explanation = self._generate_explanation(
-            decision, kalman_result, trend_data, staking_info
+            prediction, confidence, rule_number, stats, 
+            final_probability, staking_info['edge_percent'],
+            expected_goals
         )
         
-        # 9. Return complete prediction
+        # Return complete prediction
         return {
-            'prediction': decision['prediction'],
-            'confidence': decision['confidence'],
-            'probability': probability,
-            'expected_goals': kalman_result['total_goals'],
-            'decision_score': decision['decision_score'],
+            'prediction': prediction,
+            'confidence': confidence,
+            'probability': final_probability,
+            'expected_goals': expected_goals,
+            'rule_number': rule_number,
             'explanation': explanation,
             'staking_info': staking_info,
-            'market_odds': market_odds,
-            'analysis': {
-                'kalman_result': kalman_result,
-                'trend_data': trend_data,
-                'prob_over': prob_over,
-                'prob_under': prob_under,
-                'home_last5_gpg': home_stats.last5_home_gpg,
-                'home_last10_gpg': home_stats.last10_home_gpg,
-                'away_last5_gpg': away_stats.last5_away_gpg,
-                'away_last10_gpg': away_stats.last10_away_gpg
+            'market_odds': market_odd,
+            'poisson_details': poisson_details,
+            'stats_analysis': {
+                'home_attack': stats['home_attack'],
+                'home_defense': stats['home_defense'],
+                'away_attack': stats['away_attack'],
+                'away_defense': stats['away_defense'],
+                'home_momentum': stats['home_momentum'],
+                'away_momentum': stats['away_momentum'],
+                'kalman_home': stats['kalman_home'],
+                'kalman_away': stats['kalman_away']
             }
         }
     
-    # ==================== EXPLANATION GENERATION ====================
-    
-    def _generate_explanation(self, decision: Dict[str, Any], 
-                            kalman_result: Dict[str, float],
-                            trend_data: Dict[str, Any],
-                            staking_info: Dict[str, float]) -> str:
-        """Generate detailed explanation"""
+    def _generate_explanation(self, prediction: str, confidence: str, rule_number: int, 
+                            stats: Dict, probability: float, edge: float,
+                            expected_goals: float) -> str:
+        """Generate detailed explanation for the prediction"""
         
-        prediction = decision['prediction']
-        confidence = decision['confidence']
-        total_goals = kalman_result['total_goals']
-        
-        explanation_parts = []
-        
-        # Kalman analysis
-        explanation_parts.append(
-            f"Kalman estimate: {total_goals:.2f} total goals "
-            f"(Last5: {kalman_result['last5_contribution']:.2f}, "
-            f"Last10: {kalman_result['last10_contribution']:.2f})"
-        )
-        
-        # Trend analysis
-        explanation_parts.append(
-            f"Trend: Home {trend_data['home_trend']} "
-            f"(Δ: {trend_data['home_momentum']:.0%}), "
-            f"Away {trend_data['away_trend']} "
-            f"(Δ: {trend_data['away_momentum']:.0%})"
-        )
-        
-        # Probability and decision score
-        explanation_parts.append(
-            f"Probability: {decision['probability']:.1%} {prediction} "
-            f"(Score: {decision['decision_score']:.1f}/100)"
-        )
-        
-        # Staking rationale
-        if staking_info['stake_amount'] > 0:
-            explanation_parts.append(
-                f"Edge: {staking_info['edge_percent']:.1f}% → "
-                f"Stake: ${staking_info['stake_amount']:.2f}"
+        if rule_number == 5 and prediction == "No Bet":
+            return (
+                f"No clear statistical edge. Kalman optimal estimates: "
+                f"Home: {stats['kalman_home']:.2f}, Away: {stats['kalman_away']:.2f}. "
+                f"Expected goals: {expected_goals:.2f}. Bayesian probability inconclusive."
             )
         
-        return " | ".join(explanation_parts)
-    
-    def _generate_no_bet_explanation(self, kalman_result: Dict[str, float],
-                                   trend_data: Dict[str, Any]) -> str:
-        """Explanation for no bet scenarios"""
-        return (
-            f"No clear edge. Expected goals: {kalman_result['total_goals']:.2f} "
-            f"(Last5: {kalman_result['last5_contribution']:.2f}, "
-            f"Last10: {kalman_result['last10_contribution']:.2f}). "
-            f"Insufficient statistical advantage."
-        )
+        # Prepare template variables
+        template_vars = {
+            'prediction': prediction,
+            'total_goals': expected_goals,
+            'last5_contribution': (stats['home_last5'] + stats['away_last5']) / 2,
+            'last10_contribution': (stats['home_last10'] + stats['away_last10']) / 2,
+            'edge': edge,
+            'probability': probability,
+            'confidence': stats.get('kalman_home_var', 0.1) + stats.get('kalman_away_var', 0.1),
+            'variance': (stats.get('kalman_home_var', 0.1) + stats.get('kalman_away_var', 0.1)) / 2
+        }
+        
+        # Select appropriate template based on confidence
+        if confidence == "High":
+            template_key = 1
+        elif confidence == "Moderate":
+            template_key = 2
+        else:
+            template_key = 3
+        
+        template = self.explanation_templates.get(template_key)
+        if template:
+            return template.format(**template_vars)
+        
+        return f"{confidence} confidence {prediction} based on Kalman optimal hybrid analysis."
 
 # ============================================================================
-# SIMPLE TEST FUNCTION
+# SIMPLE TEST
 # ============================================================================
 
 def test_predictor():
-    """Test the predictor with sample data"""
+    """Test the predictor"""
     
     # Create sample teams
     team_a = TeamStats(
-        team_name="Team A",
+        team_name="Bournemouth",
         matches_played=14,
         home_wins=4, home_draws=2, home_losses=1,
         home_goals_for=10, home_goals_against=5,
@@ -567,7 +602,7 @@ def test_predictor():
     )
     
     team_b = TeamStats(
-        team_name="Team B",
+        team_name="Everton",
         matches_played=14,
         home_wins=3, home_draws=2, home_losses=2,
         home_goals_for=8, home_goals_against=9,
@@ -584,7 +619,7 @@ def test_predictor():
     )
     
     # Initialize predictor
-    predictor = KalmanHybridPredictor(bankroll=1000.0)
+    predictor = CompletePhantomPredictor(bankroll=1000.0)
     
     # Make prediction
     result = predictor.predict_match(
@@ -597,20 +632,21 @@ def test_predictor():
     
     # Display results
     print("=" * 60)
-    print("KALMAN HYBRID PREDICTION SYSTEM")
+    print("COMPLETE PHANTOM PREDICTOR v5.0")
     print("=" * 60)
     print(f"Match: {team_a.team_name} vs {team_b.team_name}")
     print(f"Prediction: {result['prediction']}")
     print(f"Confidence: {result['confidence']}")
     print(f"Probability: {result['probability']:.1%}")
     print(f"Expected Goals: {result['expected_goals']:.2f}")
+    print(f"\nExplanation: {result['explanation']}")
     
     if result['prediction'] != 'NO BET':
-        print(f"\nExplanation: {result['explanation']}")
         print(f"\nStaking Info:")
         print(f"  Stake: ${result['staking_info']['stake_amount']:.2f}")
         print(f"  Edge: {result['staking_info']['edge_percent']:.1f}%")
-        print(f"  Value Rating: {result['staking_info']['value_rating']}")
+        print(f"  Expected Value: ${result['staking_info']['expected_value']:.2f}")
+        print(f"  Risk Level: {result['staking_info']['risk_level']}")
 
 if __name__ == "__main__":
     test_predictor()
