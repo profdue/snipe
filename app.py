@@ -216,8 +216,8 @@ class EdgeFinderFootballApp:
             initial_sidebar_state="expanded"
         )
         
-        # Now initialize predictor
-        self.predictor = EdgeFinderPredictor(bankroll=1000.0, min_edge=0.03)
+        # Initialize predictor - FIXED: Now we'll create it later with updated parameters
+        # Don't initialize here - wait until we have user settings
         
         # Load leagues
         self.leagues = self.load_leagues()
@@ -328,6 +328,21 @@ class EdgeFinderFootballApp:
                 away_options = [t for t in team_names if t != home_team]
                 away_team = st.selectbox("✈️ Away Team", away_options)
             
+            # Advanced predictor settings
+            st.subheader("⚡ Predictor Configuration")
+            
+            with st.expander("Advanced Settings"):
+                # Model parameters
+                form_weight = st.slider("Form Weight %", 20, 60, 40, 5) / 100.0
+                improvement_threshold = st.slider("Improvement Threshold %", 5, 25, 15, 1) / 100.0 + 1.0
+                decline_threshold = 1.0 - st.slider("Decline Threshold %", 5, 25, 15, 1) / 100.0
+                away_venue_factor = st.slider("Away Venue Factor %", 70, 95, 85, 5) / 100.0
+                
+                # Goal expectation bounds
+                max_team_goals = st.slider("Max Goals Per Team", 3.0, 5.0, 4.0, 0.1)
+                max_total_goals = st.slider("Max Total Goals", 3.5, 6.0, 4.5, 0.1)
+                min_team_goals = st.slider("Min Goals Per Team", 0.1, 0.5, 0.2, 0.05)
+            
             # Market odds - PROPERLY ORGANIZED
             st.subheader("💰 Market Odds")
             
@@ -402,10 +417,19 @@ class EdgeFinderFootballApp:
             min_edge = st.slider("Minimum Edge %", 1.0, 10.0, 3.0, 0.5) / 100
             max_exposure = st.slider("Max Correlation Exposure %", 5.0, 20.0, 10.0, 1.0) / 100
             
-            # Update predictor settings
-            self.predictor.bankroll = bankroll
-            self.predictor.min_edge = min_edge
-            self.predictor.max_correlation_exposure = max_exposure
+            # Initialize predictor with ALL parameters - FIXED
+            self.predictor = EdgeFinderPredictor(
+                bankroll=bankroll,
+                min_edge=min_edge,
+                max_correlation_exposure=max_exposure,
+                form_weight=form_weight,
+                improvement_threshold=improvement_threshold,
+                decline_threshold=decline_threshold,
+                max_team_goals=max_team_goals,
+                max_total_goals=max_total_goals,
+                min_team_goals=min_team_goals,
+                away_venue_factor=away_venue_factor
+            )
             
             # Logic framework display
             with st.expander("📚 Logic Framework"):
@@ -422,7 +446,7 @@ class EdgeFinderFootballApp:
                 
                 3. **TRANSITION** (How they CHANGE)
                 - BTTS and Over/Under patterns
-                - Recent form weighted 40% vs season 60%
+                - Recent form weighted {form_weight:.0%} vs season {1-form_weight:.0%}
                 
                 **Value Detection**: Edge = P_model - P_market
                 - ⭐⭐⭐ **Golden Nugget**: Edge > 5% with high confidence
@@ -434,7 +458,7 @@ class EdgeFinderFootballApp:
                 2. Double Chance (Home or Draw / Away or Draw)
                 3. Goals Markets (Over/Under 2.5)
                 4. BTTS Markets (Yes/No)
-                """)
+                """.format(form_weight=form_weight))
             
             # Analyze button
             analyze_btn = st.button("🔍 Analyze Match", type="primary", use_container_width=True)
@@ -464,7 +488,7 @@ class EdgeFinderFootballApp:
                     )
                 
                 # Display results
-                self.display_results(result, home_stats, away_stats)
+                self.display_results(result, home_stats, away_stats, form_weight)
                 
             except Exception as e:
                 st.error(f"Error analyzing match: {str(e)}")
@@ -472,7 +496,7 @@ class EdgeFinderFootballApp:
         else:
             self.display_welcome_screen()
     
-    def display_results(self, result, home_stats, away_stats):
+    def display_results(self, result, home_stats, away_stats, form_weight):
         """Display analysis results"""
         
         # Match header
@@ -670,6 +694,9 @@ class EdgeFinderFootballApp:
             st.write(f"**Historical Patterns:**")
             st.write(f"- Combined BTTS: {transition['combined_btts']:.1f}%")
             st.write(f"- Combined Over 2.5: {transition['combined_over25']:.1f}%")
+            
+            # Show form weight
+            st.info(f"*Recent form weighted {form_weight*100:.0f}% in calculations*")
         
         # Show match insights
         if analysis['match_insights']:
@@ -677,7 +704,7 @@ class EdgeFinderFootballApp:
             for insight in analysis['match_insights']:
                 st.info(f"• {insight}")
         
-        # Goal expectations
+        # Goal expectations - FIXED: Use correct adjustment factor names
         goal_exp = analysis['goal_expectations']
         st.markdown("### ⚽ Goal Expectations")
         
@@ -690,21 +717,27 @@ class EdgeFinderFootballApp:
             st.caption(f"Season xG: {away_stats.xg_for_avg:.2f}")
         with col3:
             st.metric("Total Expected Goals", f"{goal_exp['total_goals']:.2f}")
-            st.caption(f"League Average: {self.predictor.league_context['premier_league']['avg_gpg']}")
+            # FIXED: Use correct league context access
+            avg_gpg = self.predictor.league_context.get('premier_league', {}).get('avg_gpg', 2.7)
+            st.caption(f"League Average: {avg_gpg}")
         
-        # Show adjustment factors
+        # Show adjustment factors - FIXED: Use correct keys
         with st.expander("🔧 Goal Expectation Adjustments"):
             adj_factors = goal_exp['adjustment_factors']
             col1, col2 = st.columns(2)
             with col1:
                 st.write(f"**{home_stats.team_name} Adjustments:**")
+                st.write(f"- Base xG: {adj_factors['home_base_xg']:.2f}")
+                st.write(f"- Venue Multiplier: {adj_factors['home_venue_mult']:.2f}x")
                 st.write(f"- Efficiency: {adj_factors['home_efficiency']:.2f}x")
-                st.write(f"- Venue Boost: {adj_factors['home_venue_boost']:.2f}x")
+                st.write(f"- Defense Adjustment: {adj_factors['home_defense_adj']:.2f}x")
                 st.write(f"- Form Adjustment: {adj_factors['home_form_adj']:.2f}x")
             with col2:
                 st.write(f"**{away_stats.team_name} Adjustments:**")
+                st.write(f"- Base xG: {adj_factors['away_base_xg']:.2f}")
+                st.write(f"- Venue Multiplier: {adj_factors['away_venue_mult']:.2f}x")
                 st.write(f"- Efficiency: {adj_factors['away_efficiency']:.2f}x")
-                st.write(f"- Venue Penalty: {adj_factors['away_venue_penalty']:.2f}x")
+                st.write(f"- Defense Adjustment: {adj_factors['away_defense_adj']:.2f}x")
                 st.write(f"- Form Adjustment: {adj_factors['away_form_adj']:.2f}x")
         
         # Probabilities
@@ -776,9 +809,18 @@ class EdgeFinderFootballApp:
         
         1. **Select a league** from the sidebar
         2. **Choose home and away teams**
-        3. **Set market odds** (use templates or custom)
-        4. **Configure your bankroll** settings
-        5. **Click "Analyze Match"** to find value bets
+        3. **Configure advanced predictor settings**
+        4. **Set market odds** (use templates or custom)
+        5. **Configure your bankroll** settings
+        6. **Click "Analyze Match"** to find value bets
+        
+        ### ⚡ Advanced Configuration
+        
+        You can now customize:
+        - **Form weight**: How much recent form matters
+        - **Goal expectation bounds**: Realistic goal limits
+        - **Venue factors**: Home/away adjustments
+        - **Improvement thresholds**: When teams are "improving"
         
         ### 💰 How We Find Value
         
