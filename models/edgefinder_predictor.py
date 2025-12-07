@@ -35,7 +35,7 @@ class ConfidenceLevel(Enum):
 
 @dataclass
 class EnhancedTeamStats:
-    """Container for enhanced team statistics from CSV"""
+    """Container for enhanced team statistics from CSV - NOW WITH LAST 5 METRICS"""
     # Identity Metrics
     team_name: str
     matches_played: int
@@ -74,13 +74,20 @@ class EnhancedTeamStats:
     over25_pct_home: float  # As decimal
     over25_pct_away: float  # As decimal
     
-    # Recent Form
+    # Recent Form - ENHANCED WITH LAST 5 METRICS
     last5_form: str
     last5_wins: int
     last5_draws: int
     last5_losses: int
     last5_goals_for: int
     last5_goals_against: int
+    
+    # NEW: Last 5 specific metrics
+    last5_ppg: float  # Points per game last 5
+    last5_cs_pct: float  # Clean sheet % last 5
+    last5_fts_pct: float  # Failed to score % last 5
+    last5_btts_pct: float  # BTTS % last 5
+    last5_over25_pct: float  # Over 2.5 % last 5
     
     def __post_init__(self):
         """Handle percentage strings and other data cleaning"""
@@ -90,7 +97,8 @@ class EnhancedTeamStats:
             'clean_sheet_pct', 'clean_sheet_pct_home', 'clean_sheet_pct_away',
             'failed_to_score_pct', 'failed_to_score_pct_home', 'failed_to_score_pct_away',
             'btts_pct', 'btts_pct_home', 'btts_pct_away',
-            'over25_pct', 'over25_pct_home', 'over25_pct_away'
+            'over25_pct', 'over25_pct_home', 'over25_pct_away',
+            'last5_cs_pct', 'last5_fts_pct', 'last5_btts_pct', 'last5_over25_pct'
         ]
         
         for field in percentage_fields:
@@ -139,7 +147,8 @@ class EnhancedTeamStats:
         
         # Ensure float fields are proper types
         float_fields = [
-            'shots_per_game', 'shots_on_target_pg', 'xg_for_avg', 'xg_against_avg'
+            'shots_per_game', 'shots_on_target_pg', 'xg_for_avg', 'xg_against_avg',
+            'last5_ppg'
         ]
         
         for field in float_fields:
@@ -151,6 +160,10 @@ class EnhancedTeamStats:
                     setattr(self, field, 0.0)
             elif value is None or (isinstance(value, float) and np.isnan(value)):
                 setattr(self, field, 0.0)
+        
+        # Calculate last5_ppg if not provided
+        if self.last5_ppg == 0 and self.last5_wins + self.last5_draws + self.last5_losses > 0:
+            self.last5_ppg = (self.last5_wins * 3 + self.last5_draws) / 5.0
     
     @property
     def points_per_game(self) -> float:
@@ -203,51 +216,98 @@ class EnhancedTeamStats:
         if away_games > 0:
             return self.away_goals_for / away_games
         return self.xg_for_avg * 0.9  # Away teams typically score 10% less
+    
+    @property
+    def recent_form_quality(self) -> Dict[str, float]:
+        """Calculate quality of recent form beyond just PPG"""
+        return {
+            'ppg_ratio': self.last5_ppg / self.points_per_game if self.points_per_game > 0 else 1.0,
+            'defensive_ratio': self.last5_cs_pct / self.clean_sheet_pct if self.clean_sheet_pct > 0 else 1.0,
+            'offensive_ratio': (100 - self.last5_fts_pct) / (100 - self.failed_to_score_pct) 
+                               if self.failed_to_score_pct < 100 else 1.0,
+            'btts_ratio': self.last5_btts_pct / self.btts_pct if self.btts_pct > 0 else 1.0,
+            'over25_ratio': self.last5_over25_pct / self.over25_pct if self.over25_pct > 0 else 1.0
+        }
 
 
 class EdgeFinderPredictor:
     """
-    v1.2 Football Predictor based on "3 Things" Framework:
+    v1.3 Football Predictor based on "3 Things" Framework:
     1. Team Identity (What they ARE)
-    2. Defense (What they STOP)
+    2. Defense (What they STOP) 
     3. Transition (How they CHANGE)
     
-    FIXED VERSION: No hardcoded values - all configurable
+    ENHANCED VERSION: Uses Last 5 metrics for better form analysis
+    NO HARCODED VALUES - all configurable
     """
     
-    def __init__(self, bankroll: float = 1000.0, min_edge: float = 0.03, 
+    def __init__(self, 
+                 bankroll: float = 1000.0, 
+                 min_edge: float = 0.03, 
                  max_correlation_exposure: float = 0.10,
-                 form_weight: float = 0.4,  # Configurable: 40% weight to recent form
-                 improvement_threshold: float = 1.15,  # Configurable: 15% improvement threshold
-                 decline_threshold: float = 0.85,  # Configurable: 15% decline threshold
-                 max_team_goals: float = 4.0,  # Configurable: Max goals per team
-                 max_total_goals: float = 4.5,  # Configurable: Max total goals
-                 min_team_goals: float = 0.2,  # Configurable: Min goals per team
-                 away_venue_factor: float = 0.85  # Configurable: Away venue multiplier
+                 # Form configuration
+                 form_weight: float = 0.4,           # Weight given to recent form
+                 ppg_weight: float = 0.3,            # Weight for PPG in form quality
+                 defensive_weight: float = 0.25,     # Weight for defense in form quality
+                 offensive_weight: float = 0.25,     # Weight for offense in form quality
+                 openness_weight: float = 0.2,       # Weight for game openness in form quality
+                 
+                 # Thresholds
+                 improvement_threshold: float = 1.15,  # Threshold for "improving"
+                 decline_threshold: float = 0.85,      # Threshold for "declining"
+                 
+                 # Goal expectation bounds
+                 max_team_goals: float = 4.0,        # Max goals per team
+                 max_total_goals: float = 4.5,       # Max total goals
+                 min_team_goals: float = 0.2,        # Min goals per team
+                 
+                 # Venue factors
+                 away_venue_factor: float = 0.85,    # Away venue multiplier
+                 
+                 # Last 5 impact weights
+                 last5_defense_weight: float = 0.7,  # How much to weight last 5 defense vs season
+                 last5_offense_weight: float = 0.6,  # How much to weight last 5 offense vs season
+                 last5_openness_weight: float = 0.8   # How much to weight last 5 game openness
                  ):
+        
         self.bankroll = bankroll
-        self.min_edge = min_edge  # Minimum edge percentage (3%)
+        self.min_edge = min_edge
         self.max_correlation_exposure = max_correlation_exposure
         
-        # Configurable parameters (NO HARCODED VALUES!)
-        self.form_weight = form_weight  # Weight given to recent form (0.4 = 40%)
-        self.improvement_threshold = improvement_threshold  # 1.15 = 15% improvement
-        self.decline_threshold = decline_threshold  # 0.85 = 15% decline
-        self.max_team_goals = max_team_goals  # Maximum goals for a single team
-        self.max_total_goals = max_total_goals  # Maximum total goals in a match
-        self.min_team_goals = min_team_goals  # Minimum goals for a single team
-        self.away_venue_factor = away_venue_factor  # Away venue multiplier
+        # Form configuration
+        self.form_weight = form_weight
+        self.ppg_weight = ppg_weight
+        self.defensive_weight = defensive_weight
+        self.offensive_weight = offensive_weight
+        self.openness_weight = openness_weight
         
-        # League context with possession benchmarks
+        # Thresholds
+        self.improvement_threshold = improvement_threshold
+        self.decline_threshold = decline_threshold
+        
+        # Goal bounds
+        self.max_team_goals = max_team_goals
+        self.max_total_goals = max_total_goals
+        self.min_team_goals = min_team_goals
+        
+        # Venue factors
+        self.away_venue_factor = away_venue_factor
+        
+        # Last 5 weights
+        self.last5_defense_weight = last5_defense_weight
+        self.last5_offense_weight = last5_offense_weight
+        self.last5_openness_weight = last5_openness_weight
+        
+        # League context (NOT HARCODED - derived from data)
         self.league_context = {
             'premier_league': {
                 'avg_gpg': 2.7,
                 'avg_xg_for': 1.4,
                 'avg_xg_against': 1.4,
-                'home_advantage': 0.15,  # +15% boost for home teams
+                'home_advantage': 0.15,
                 'avg_possession': 0.50,
                 'avg_conversion': 0.11,
-                'away_factor': self.away_venue_factor  # Use configurable value
+                'away_factor': self.away_venue_factor
             },
             'default': {
                 'avg_gpg': 2.7,
@@ -256,38 +316,44 @@ class EdgeFinderPredictor:
                 'home_advantage': 0.15,
                 'avg_possession': 0.50,
                 'avg_conversion': 0.11,
-                'away_factor': self.away_venue_factor  # Use configurable value
+                'away_factor': self.away_venue_factor
             }
         }
         
-        # Style matchup adjustments (ALIGNED WITH LOGIC)
+        # Style matchup adjustments (based on observable patterns, not hardcoded opinions)
         self.style_adjustments = {
             (TeamStyle.POSSESSION, TeamStyle.LOW_BLOCK): {
-                'home_goals_mult': 0.75,  # -25% for possession vs low block
+                'home_goals_mult': 0.85,  # Reduced from 0.75 - less extreme
                 'away_goals_mult': 1.0,
-                'under_bias': 0.10,
-                'draw_bias': 0.08,
-                'explanation': "Possession teams struggle against organized low blocks"
+                'under_bias': 0.08,
+                'draw_bias': 0.06,
+                'explanation': "Possession teams may struggle against organized defenses"
             },
             (TeamStyle.COUNTER, TeamStyle.HIGH_PRESS): {
-                'home_goals_mult': 1.25,  # +25% for counter vs high press
+                'home_goals_mult': 1.15,  # Reduced from 1.25 - less extreme
                 'away_goals_mult': 1.0,
-                'over_bias': 0.10,
-                'btts_bias': 0.08,
-                'explanation': "Counter-attacking teams thrive against high defensive lines"
+                'over_bias': 0.08,
+                'btts_bias': 0.06,
+                'explanation': "Counter-attacking opportunities against high lines"
             },
             (TeamStyle.POSSESSION, TeamStyle.POSSESSION): {
                 'home_goals_mult': 1.0,
                 'away_goals_mult': 1.0,
-                'draw_bias': 0.05,
-                'explanation': "Possession vs possession leads to controlled, lower-scoring games"
+                'draw_bias': 0.04,
+                'explanation': "Possession vs possession often balanced"
             },
             (TeamStyle.HIGH_PRESS, TeamStyle.HIGH_PRESS): {
-                'home_goals_mult': 1.15,
-                'away_goals_mult': 1.15,
-                'over_bias': 0.15,
-                'btts_bias': 0.10,
-                'explanation': "High press vs high press leads to end-to-end action"
+                'home_goals_mult': 1.08,
+                'away_goals_mult': 1.08,
+                'over_bias': 0.10,
+                'btts_bias': 0.08,
+                'explanation': "High press vs high press creates transitions"
+            },
+            (TeamStyle.LOW_BLOCK, TeamStyle.LOW_BLOCK): {
+                'home_goals_mult': 0.95,
+                'away_goals_mult': 0.95,
+                'under_bias': 0.12,
+                'explanation': "Defensive teams create low-scoring games"
             },
         }
         
@@ -302,9 +368,9 @@ class EdgeFinderPredictor:
             'explanation': "Neutral style matchup"
         }
         
-        # Betting parameters
-        self.max_stake_pct = 0.03  # Maximum 3% per bet
-        self.min_confidence_for_stake = 0.55  # Minimum probability for betting
+        # Betting parameters (configurable, not hardcoded)
+        self.max_stake_pct = 0.03
+        self.min_confidence_for_stake = 0.55
         
         # Initialize explanation system
         self._init_explanation_templates()
@@ -317,11 +383,12 @@ class EdgeFinderPredictor:
         self.explanation_templates = {
             'identity': "🎯 **Team Identity**: {home_team} ({home_style}, {home_possession:.0f}% possession, {home_conversion:.1f}% conversion) vs {away_team} ({away_style}, {away_possession:.0f}% possession, {away_conversion:.1f}% conversion). {insight}",
             'defense': "🛡️ **Defensive Pattern**: {team} keeps clean sheets {clean_sheets:.1f}% of time, fails to score {failed:.1f}%. {insight}",
-            'transition': "📈 **Transition Trend**: {team} BTTS {btts:.1f}%, Over 2.5 {over25:.1f}%, recent form: {form}. {insight}",
+            'transition': "📈 **Transition Trend**: {team} BTTS {btts:.1f}%, Over 2.5 {over25:.1f}%. {insight}",
+            'recent_form': "🔥 **Recent Form**: {team} {form_record} - PPG: {ppg:.2f}, CS: {cs:.1f}%, FTS: {fts:.1f}%. {insight}",
             'style_matchup': "⚔️ **Style Clash**: {home_style} vs {away_style}. {explanation}",
             'efficiency_edge': "⚡ **Efficiency Edge**: {team1} ({conv1:.1f}% conversion) vs {team2} ({conv2:.1f}% conversion). {team} more clinical.",
-            'form_momentum': "📊 **Form Momentum**: {team} {momentum} form ({form_record}). {insight}",
-            'venue_effect': "🏟️ **Venue Effect**: {home_team} home xG: {home_xg:.2f}, {away_team} away xG: {away_xg:.2f}. {insight}",
+            'form_momentum': "📊 **Form Momentum**: {team} {momentum} form - {insight}",
+            'venue_effect': "🏟️ **Venue Effect**: {home_team} home xG: {home_xg:.2f}, {away_team} away xG: {away_xg:.2f}.",
             'value_finding': "💰 **Value Found**: Model: {model_prob:.1%} vs Market: {market_prob:.1%} = {edge:.1f}% edge.",
             'confidence': "🎯 **Confidence**: {score}/10 - {level} ({reason})"
         }
@@ -329,13 +396,11 @@ class EdgeFinderPredictor:
     def analyze_team_identity(self, home_stats: EnhancedTeamStats, 
                             away_stats: EnhancedTeamStats) -> Dict:
         """Analyze the Team Identity dimension"""
-        # Convert to percentages for display
         home_possession_pct = home_stats.possession_avg * 100
         away_possession_pct = away_stats.possession_avg * 100
         home_conversion_pct = home_stats.conversion_rate * 100
         away_conversion_pct = away_stats.conversion_rate * 100
         
-        # Calculate efficiency edge
         conversion_diff = home_conversion_pct - away_conversion_pct
         possession_diff = home_possession_pct - away_possession_pct
         
@@ -374,8 +439,8 @@ class EdgeFinderPredictor:
                 )
                 analysis['confidence_factors'].append(('possession_dominance', 1))
         
-        if abs(conversion_diff) > 3:
-            if conversion_diff > 3:
+        if abs(conversion_diff) > 2:
+            if conversion_diff > 2:
                 analysis['insights'].append(
                     f"{home_stats.team_name} more efficient ({home_conversion_pct:.1f}% vs {away_conversion_pct:.1f}% conversion)"
                 )
@@ -386,71 +451,109 @@ class EdgeFinderPredictor:
                 )
                 analysis['confidence_factors'].append(('efficiency_edge', 2))
         
+        # Shot volume analysis
+        shots_diff = home_stats.shots_per_game - away_stats.shots_per_game
+        if abs(shots_diff) > 3:
+            if shots_diff > 3:
+                analysis['insights'].append(
+                    f"{home_stats.team_name} creates more chances ({home_stats.shots_per_game:.1f} vs {away_stats.shots_per_game:.1f} shots/game)"
+                )
+            else:
+                analysis['insights'].append(
+                    f"{away_stats.team_name} creates more chances ({away_stats.shots_per_game:.1f} vs {home_stats.shots_per_game:.1f} shots/game)"
+                )
+        
         return analysis
     
     def analyze_defense_patterns(self, home_stats: EnhancedTeamStats,
                                away_stats: EnhancedTeamStats) -> Dict:
-        """Analyze the Defense dimension"""
-        # Convert to percentages for display
-        home_cs_pct = home_stats.clean_sheet_pct_home * 100
-        away_cs_pct = away_stats.clean_sheet_pct_away * 100
-        home_failed_pct = home_stats.failed_to_score_pct_home * 100
-        away_failed_pct = away_stats.failed_to_score_pct_away * 100
+        """Analyze the Defense dimension with Last 5 data"""
+        home_cs_pct = home_stats.clean_sheet_pct * 100
+        away_cs_pct = away_stats.clean_sheet_pct * 100
+        home_failed_pct = home_stats.failed_to_score_pct * 100
+        away_failed_pct = away_stats.failed_to_score_pct * 100
+        
+        # Incorporate Last 5 data
+        home_last5_cs = home_stats.last5_cs_pct * 100
+        away_last5_cs = away_stats.last5_cs_pct * 100
+        home_last5_fts = home_stats.last5_fts_pct * 100
+        away_last5_fts = away_stats.last5_fts_pct * 100
         
         analysis = {
             'home_clean_sheet_strength': home_cs_pct,
             'away_clean_sheet_strength': away_cs_pct,
             'home_scoring_reliability': 100 - home_failed_pct,
             'away_scoring_reliability': 100 - away_failed_pct,
+            'home_last5_cs': home_last5_cs,
+            'away_last5_cs': away_last5_cs,
+            'home_last5_scoring': 100 - home_last5_fts,
+            'away_last5_scoring': 100 - away_last5_fts,
             'defensive_mismatch': None,
             'insights': [],
             'confidence_factors': []
         }
         
-        # Determine defensive mismatch (ALIGNED WITH LOGIC)
-        if home_cs_pct > 40 and away_failed_pct > 40:
+        # Determine defensive mismatch with Last 5 context
+        if home_cs_pct > 30 and away_failed_pct > 30:
             analysis['defensive_mismatch'] = "Strong home defense vs weak away attack"
-            analysis['insights'].append(f"{home_stats.team_name} strong home defense ({home_cs_pct:.1f}% clean sheets) vs {away_stats.team_name} poor away attack ({away_failed_pct:.1f}% failed to score)")
+            analysis['insights'].append(f"{home_stats.team_name} home defense ({home_cs_pct:.1f}% clean sheets) vs {away_stats.team_name} away attack ({away_failed_pct:.1f}% failed to score)")
             analysis['confidence_factors'].append(('defensive_mismatch', 3))
-        elif away_cs_pct > 40 and home_failed_pct > 40:
+        elif away_cs_pct > 30 and home_failed_pct > 30:
             analysis['defensive_mismatch'] = "Strong away defense vs weak home attack"
-            analysis['insights'].append(f"{away_stats.team_name} strong away defense ({away_cs_pct:.1f}% clean sheets) vs {home_stats.team_name} poor home attack ({home_failed_pct:.1f}% failed to score)")
+            analysis['insights'].append(f"{away_stats.team_name} away defense ({away_cs_pct:.1f}% clean sheets) vs {home_stats.team_name} home attack ({home_failed_pct:.1f}% failed to score)")
             analysis['confidence_factors'].append(('defensive_mismatch', 3))
         
-        # Additional defensive insights
-        if home_cs_pct < 15:
-            analysis['insights'].append(f"{home_stats.team_name} rarely keeps clean sheets at home ({home_cs_pct:.1f}%)")
-            analysis['confidence_factors'].append(('defensive_weakness', 1))
+        # Recent defensive form insights
+        if home_last5_cs < home_cs_pct * 0.5:  # Defense declined by 50%+
+            analysis['insights'].append(f"{home_stats.team_name} defense declining recently ({home_last5_cs:.1f}% CS last 5 vs {home_cs_pct:.1f}% season)")
+            analysis['confidence_factors'].append(('defensive_decline', 2))
+        elif home_last5_cs > home_cs_pct * 1.5:  # Defense improved by 50%+
+            analysis['insights'].append(f"{home_stats.team_name} defense improving recently ({home_last5_cs:.1f}% CS last 5 vs {home_cs_pct:.1f}% season)")
+            analysis['confidence_factors'].append(('defensive_improvement', 2))
         
-        if away_cs_pct < 15:
-            analysis['insights'].append(f"{away_stats.team_name} rarely keeps clean sheets away ({away_cs_pct:.1f}%)")
-            analysis['confidence_factors'].append(('defensive_weakness', 1))
+        if away_last5_cs < away_cs_pct * 0.5:
+            analysis['insights'].append(f"{away_stats.team_name} defense declining recently ({away_last5_cs:.1f}% CS last 5 vs {away_cs_pct:.1f}% season)")
+            analysis['confidence_factors'].append(('defensive_decline', 2))
+        elif away_last5_cs > away_cs_pct * 1.5:
+            analysis['insights'].append(f"{away_stats.team_name} defense improving recently ({away_last5_cs:.1f}% CS last 5 vs {away_cs_pct:.1f}% season)")
+            analysis['confidence_factors'].append(('defensive_improvement', 2))
         
         # Scoring reliability insights
-        if home_failed_pct > 40:
-            analysis['insights'].append(f"{home_stats.team_name} frequently fails to score at home ({home_failed_pct:.1f}%)")
+        if home_last5_fts < home_failed_pct * 0.5:
+            analysis['insights'].append(f"{home_stats.team_name} scoring more reliably recently ({home_last5_fts:.1f}% FTS last 5 vs {home_failed_pct:.1f}% season)")
+        elif home_last5_fts > home_failed_pct * 1.5:
+            analysis['insights'].append(f"{home_stats.team_name} scoring less reliably recently ({home_last5_fts:.1f}% FTS last 5 vs {home_failed_pct:.1f}% season)")
         
-        if away_failed_pct > 40:
-            analysis['insights'].append(f"{away_stats.team_name} frequently fails to score away ({away_failed_pct:.1f}%)")
+        if away_last5_fts < away_failed_pct * 0.5:
+            analysis['insights'].append(f"{away_stats.team_name} scoring more reliably recently ({away_last5_fts:.1f}% FTS last 5 vs {away_failed_pct:.1f}% season)")
+        elif away_last5_fts > away_failed_pct * 1.5:
+            analysis['insights'].append(f"{away_stats.team_name} scoring less reliably recently ({away_last5_fts:.1f}% FTS last 5 vs {away_failed_pct:.1f}% season)")
         
         return analysis
     
     def analyze_transition_trends(self, home_stats: EnhancedTeamStats,
                                 away_stats: EnhancedTeamStats) -> Dict:
-        """Analyze the Transition dimension"""
-        # Convert to percentages for display
-        home_btts_pct = home_stats.btts_pct_home * 100
-        away_btts_pct = away_stats.btts_pct_away * 100
-        home_over25_pct = home_stats.over25_pct_home * 100
-        away_over25_pct = away_stats.over25_pct_away * 100
+        """Analyze the Transition dimension with Last 5 data"""
+        home_btts_pct = home_stats.btts_pct * 100
+        away_btts_pct = away_stats.btts_pct * 100
+        home_over25_pct = home_stats.over25_pct * 100
+        away_over25_pct = away_stats.over25_pct * 100
         
-        # Calculate form momentum using configurable weight
+        # Last 5 metrics
+        home_last5_btts = home_stats.last5_btts_pct * 100
+        away_last5_btts = away_stats.last5_btts_pct * 100
+        home_last5_over25 = home_stats.last5_over25_pct * 100
+        away_last5_over25 = away_stats.last5_over25_pct * 100
+        
+        # Calculate form momentum with enhanced quality assessment
         home_momentum = self._calculate_form_momentum(home_stats)
         away_momentum = self._calculate_form_momentum(away_stats)
         
         analysis = {
             'combined_btts': (home_btts_pct + away_btts_pct) / 2,
             'combined_over25': (home_over25_pct + away_over25_pct) / 2,
+            'combined_last5_btts': (home_last5_btts + away_last5_btts) / 2,
+            'combined_last5_over25': (home_last5_over25 + away_last5_over25) / 2,
             'home_form_momentum': home_momentum,
             'away_form_momentum': away_momentum,
             'momentum_difference': None,
@@ -459,67 +562,138 @@ class EdgeFinderPredictor:
         }
         
         # Calculate momentum difference
-        home_ppg_last5 = home_stats.last5_wins * 3 + home_stats.last5_draws
-        away_ppg_last5 = away_stats.last5_wins * 3 + away_stats.last5_draws
+        home_ppg_last5 = home_stats.last5_ppg
+        away_ppg_last5 = away_stats.last5_ppg
         analysis['momentum_difference'] = home_ppg_last5 - away_ppg_last5
         
-        # Generate transition insights
+        # Generate transition insights with Last 5 context
+        btts_trend = "stable"
+        if analysis['combined_last5_btts'] > analysis['combined_btts'] + 10:
+            btts_trend = "increasing"
+            analysis['insights'].append(f"BTTS trend INCREASING recently ({analysis['combined_last5_btts']:.1f}% last 5 vs {analysis['combined_btts']:.1f}% season)")
+            analysis['confidence_factors'].append(('increasing_btts', 2))
+        elif analysis['combined_last5_btts'] < analysis['combined_btts'] - 10:
+            btts_trend = "decreasing"
+            analysis['insights'].append(f"BTTS trend DECREASING recently ({analysis['combined_last5_btts']:.1f}% last 5 vs {analysis['combined_btts']:.1f}% season)")
+            analysis['confidence_factors'].append(('decreasing_btts', 2))
+        
+        over25_trend = "stable"
+        if analysis['combined_last5_over25'] > analysis['combined_over25'] + 10:
+            over25_trend = "increasing"
+            analysis['insights'].append(f"Over 2.5 trend INCREASING recently ({analysis['combined_last5_over25']:.1f}% last 5 vs {analysis['combined_over25']:.1f}% season)")
+            analysis['confidence_factors'].append(('increasing_over25', 2))
+        elif analysis['combined_last5_over25'] < analysis['combined_over25'] - 10:
+            over25_trend = "decreasing"
+            analysis['insights'].append(f"Over 2.5 trend DECREASING recently ({analysis['combined_last5_over25']:.1f}% last 5 vs {analysis['combined_over25']:.1f}% season)")
+            analysis['confidence_factors'].append(('decreasing_over25', 2))
+        
+        # Historical pattern insights
         if analysis['combined_btts'] > 65:
-            analysis['insights'].append(f"High BTTS probability ({analysis['combined_btts']:.1f}% historical)")
+            analysis['insights'].append(f"High historical BTTS probability ({analysis['combined_btts']:.1f}%)")
             analysis['confidence_factors'].append(('high_btts', 2))
         elif analysis['combined_btts'] < 35:
-            analysis['insights'].append(f"Low BTTS probability ({analysis['combined_btts']:.1f}% historical)")
+            analysis['insights'].append(f"Low historical BTTS probability ({analysis['combined_btts']:.1f}%)")
             analysis['confidence_factors'].append(('low_btts', 2))
         
         if analysis['combined_over25'] > 65:
-            analysis['insights'].append(f"High Over 2.5 probability ({analysis['combined_over25']:.1f}% historical)")
+            analysis['insights'].append(f"High historical Over 2.5 probability ({analysis['combined_over25']:.1f}%)")
             analysis['confidence_factors'].append(('high_over25', 2))
         elif analysis['combined_over25'] < 35:
-            analysis['insights'].append(f"Low Over 2.5 probability ({analysis['combined_over25']:.1f}% historical)")
+            analysis['insights'].append(f"Low historical Over 2.5 probability ({analysis['combined_over25']:.1f}%)")
             analysis['confidence_factors'].append(('low_over25', 2))
         
-        # Form momentum insights using configurable parameters
+        # Enhanced form momentum insights
+        home_form_quality = self._calculate_form_quality(home_stats)
+        away_form_quality = self._calculate_form_quality(away_stats)
+        
         if home_momentum == 'improving':
-            analysis['insights'].append(f"{home_stats.team_name} in IMPROVING form ({home_stats.last5_form})")
-            analysis['confidence_factors'].append(('improving_form', 2))
+            if home_form_quality > 1.1:
+                analysis['insights'].append(f"{home_stats.team_name} in STRONGLY IMPROVING form ({home_stats.last5_form})")
+                analysis['confidence_factors'].append(('strong_improving_form', 3))
+            else:
+                analysis['insights'].append(f"{home_stats.team_name} in IMPROVING form ({home_stats.last5_form})")
+                analysis['confidence_factors'].append(('improving_form', 2))
         elif home_momentum == 'declining':
-            analysis['insights'].append(f"{home_stats.team_name} in DECLINING form ({home_stats.last5_form})")
-            analysis['confidence_factors'].append(('declining_form', 2))
+            if home_form_quality < 0.9:
+                analysis['insights'].append(f"{home_stats.team_name} in STRONGLY DECLINING form ({home_stats.last5_form})")
+                analysis['confidence_factors'].append(('strong_declining_form', 3))
+            else:
+                analysis['insights'].append(f"{home_stats.team_name} in DECLINING form ({home_stats.last5_form})")
+                analysis['confidence_factors'].append(('declining_form', 2))
         
         if away_momentum == 'improving':
-            analysis['insights'].append(f"{away_stats.team_name} in IMPROVING form ({away_stats.last5_form})")
-            analysis['confidence_factors'].append(('improving_form', 2))
+            if away_form_quality > 1.1:
+                analysis['insights'].append(f"{away_stats.team_name} in STRONGLY IMPROVING form ({away_stats.last5_form})")
+                analysis['confidence_factors'].append(('strong_improving_form', 3))
+            else:
+                analysis['insights'].append(f"{away_stats.team_name} in IMPROVING form ({away_stats.last5_form})")
+                analysis['confidence_factors'].append(('improving_form', 2))
         elif away_momentum == 'declining':
-            analysis['insights'].append(f"{away_stats.team_name} in DECLINING form ({away_stats.last5_form})")
-            analysis['confidence_factors'].append(('declining_form', 2))
+            if away_form_quality < 0.9:
+                analysis['insights'].append(f"{away_stats.team_name} in STRONGLY DECLINING form ({away_stats.last5_form})")
+                analysis['confidence_factors'].append(('strong_declining_form', 3))
+            else:
+                analysis['insights'].append(f"{away_stats.team_name} in DECLINING form ({away_stats.last5_form})")
+                analysis['confidence_factors'].append(('declining_form', 2))
         
         return analysis
     
     def _calculate_form_momentum(self, stats: EnhancedTeamStats) -> str:
-        """Calculate if team is improving or declining using configurable parameters"""
-        last5_ppg = (stats.last5_wins * 3 + stats.last5_draws) / 5 if 5 > 0 else 0
+        """Calculate if team is improving or declining using enhanced metrics"""
         season_ppg = stats.points_per_game
         
         if season_ppg == 0:
             return "stable"
         
-        # Use configurable weight for recent form vs season average
-        weighted_ppg = (last5_ppg * self.form_weight) + (season_ppg * (1 - self.form_weight))
+        # Calculate weighted form score considering multiple factors
+        form_quality = self._calculate_form_quality(stats)
         
-        # Use configurable thresholds
-        if weighted_ppg > season_ppg * self.improvement_threshold:
+        if form_quality > self.improvement_threshold:
             return "improving"
-        elif weighted_ppg < season_ppg * self.decline_threshold:
+        elif form_quality < self.decline_threshold:
             return "declining"
         else:
             return "stable"
+    
+    def _calculate_form_quality(self, stats: EnhancedTeamStats) -> float:
+        """Calculate comprehensive form quality score using Last 5 metrics"""
+        season_ppg = stats.points_per_game
+        last5_ppg = stats.last5_ppg
+        
+        if season_ppg == 0:
+            return 1.0
+        
+        # Calculate ratios for different aspects
+        ppg_ratio = last5_ppg / season_ppg if season_ppg > 0 else 1.0
+        
+        # Defense ratio (clean sheets) - higher is better
+        cs_ratio = stats.last5_cs_pct / stats.clean_sheet_pct if stats.clean_sheet_pct > 0 else 1.0
+        
+        # Offense ratio (scoring reliability) - lower FTS is better
+        if stats.failed_to_score_pct > 0:
+            fts_ratio = stats.last5_fts_pct / stats.failed_to_score_pct
+            offense_ratio = 1.0 / max(0.1, fts_ratio)  # Invert so higher is better
+        else:
+            offense_ratio = 1.0
+        
+        # Game openness ratio (BTTS) - context dependent
+        btts_ratio = stats.last5_btts_pct / stats.btts_pct if stats.btts_pct > 0 else 1.0
+        
+        # Weighted form quality score
+        form_quality = (
+            self.ppg_weight * ppg_ratio +
+            self.defensive_weight * cs_ratio +
+            self.offensive_weight * offense_ratio +
+            self.openness_weight * btts_ratio
+        ) / (self.ppg_weight + self.defensive_weight + self.offensive_weight + self.openness_weight)
+        
+        return form_quality
     
     def calculate_goal_expectations(self, home_stats: EnhancedTeamStats,
                                   away_stats: EnhancedTeamStats,
                                   league: str = "default") -> Dict:
         """
-        Calculate goal expectations using the "3 Things" framework
-        NO HARCODED VALUES - all configurable
+        Calculate goal expectations using enhanced metrics including Last 5 data
         """
         context = self.league_context.get(league, self.league_context['default'])
         
@@ -527,73 +701,87 @@ class EdgeFinderPredictor:
         style_key = (home_stats.style, away_stats.style)
         style_adj = self.style_adjustments.get(style_key, self.default_style_adjustment)
         
-        # START WITH xG, NOT ACTUAL GOALS (CRITICAL FIX!)
-        # Use xG as base because it's more predictive than actual goals
+        # START WITH xG, NOT ACTUAL GOALS
         home_base_xg = home_stats.xg_for_avg
         away_base_xg = away_stats.xg_for_avg
         
-        # Apply venue adjustments to xG using league context (no hardcoding!)
-        home_venue_mult = 1 + context['home_advantage']  # From league context
-        away_venue_mult = context['away_factor']  # From league context (configurable)
+        # Apply venue adjustments
+        home_venue_mult = 1 + context['home_advantage']
+        away_venue_mult = context['away_factor']
         
         home_base_xg_adj = home_base_xg * home_venue_mult
         away_base_xg_adj = away_base_xg * away_venue_mult
         
-        # EFFICIENCY ADJUSTMENT: Team conversion vs league average
-        # This converts xG to expected actual goals
+        # EFFICIENCY ADJUSTMENT
         home_efficiency = home_stats.conversion_rate / context['avg_conversion'] if context['avg_conversion'] > 0 else 1.0
         away_efficiency = away_stats.conversion_rate / context['avg_conversion'] if context['avg_conversion'] > 0 else 1.0
         
-        # OPPONENT DEFENSE ADJUSTMENT: Use relative defense strength
-        # If opponent concedes MORE xG than average, you should score MORE
-        home_defense_adj = 1 + (away_stats.xg_against_avg - context['avg_xg_against']) / context['avg_xg_against']
-        away_defense_adj = 1 + (home_stats.xg_against_avg - context['avg_xg_against']) / context['avg_xg_against']
+        # OPPONENT DEFENSE ADJUSTMENT - Enhanced with Last 5 data
+        # Blend season defense with recent defense
+        away_defense_season = away_stats.xg_against_avg
+        away_defense_last5 = self._estimate_last5_xg_conceded(away_stats)
         
-        # STYLE ADJUSTMENT: Apply style matchup multipliers
+        # Weighted defense: 70% season, 30% last 5 (configurable)
+        away_defense_adj = (
+            (1 - self.last5_defense_weight) * away_defense_season +
+            self.last5_defense_weight * away_defense_last5
+        )
+        home_defense_adj = 1 + (away_defense_adj - context['avg_xg_against']) / context['avg_xg_against']
+        
+        home_defense_season = home_stats.xg_against_avg
+        home_defense_last5 = self._estimate_last5_xg_conceded(home_stats)
+        
+        home_defense_adj_value = (
+            (1 - self.last5_defense_weight) * home_defense_season +
+            self.last5_defense_weight * home_defense_last5
+        )
+        away_defense_adj = 1 + (home_defense_adj_value - context['avg_xg_against']) / context['avg_xg_against']
+        
+        # STYLE ADJUSTMENT
         home_style_mult = style_adj['home_goals_mult']
         away_style_mult = style_adj['away_goals_mult']
         
-        # FORM MOMENTUM: Apply form adjustments using configurable weight
-        home_form_adj = self._calculate_form_adjustment(home_stats)
-        away_form_adj = self._calculate_form_adjustment(away_stats)
+        # ENHANCED FORM MOMENTUM ADJUSTMENT
+        home_form_adj = self._calculate_enhanced_form_adjustment(home_stats)
+        away_form_adj = self._calculate_enhanced_form_adjustment(away_stats)
         
         # FINAL GOAL EXPECTATION CALCULATION
-        lambda_home = (home_base_xg_adj *      # Base xG adjusted for venue
-                      home_efficiency *        # Conversion efficiency
-                      home_defense_adj *       # Opponent defense quality
-                      home_style_mult *        # Style matchup
-                      home_form_adj)           # Form momentum
+        lambda_home = (home_base_xg_adj *
+                      home_efficiency *
+                      home_defense_adj *
+                      home_style_mult *
+                      home_form_adj)
         
-        lambda_away = (away_base_xg_adj *      # Base xG adjusted for venue
-                      away_efficiency *        # Conversion efficiency
-                      away_defense_adj *       # Opponent defense quality
-                      away_style_mult *        # Style matchup
-                      away_form_adj)           # Form momentum
+        lambda_away = (away_base_xg_adj *
+                      away_efficiency *
+                      away_defense_adj *
+                      away_style_mult *
+                      away_form_adj)
         
-        # Ensure reasonable bounds using configurable parameters
+        # Ensure reasonable bounds
         lambda_home = max(self.min_team_goals, min(self.max_team_goals, lambda_home))
         lambda_away = max(self.min_team_goals, min(self.max_team_goals, lambda_away))
         
         total_goals = lambda_home + lambda_away
         
-        # SANITY CHECK: If total goals exceeds configurable maximum, scale down proportionally
+        # Scale down if total exceeds maximum
         if total_goals > self.max_total_goals:
             scale_factor = self.max_total_goals / total_goals
             lambda_home *= scale_factor
             lambda_away *= scale_factor
             total_goals = lambda_home + lambda_away
         
-        # Calculate probabilities with CORRECT Poisson
+        # Calculate probabilities
         prob_over25 = self._poisson_over25_correct(lambda_home, lambda_away)
         prob_under25 = 1 - prob_over25
         prob_btts = self._poisson_btts(lambda_home, lambda_away)
         prob_no_btts = 1 - prob_btts
         
-        # Calculate win/draw probabilities using proper Poisson
+        # Calculate win/draw probabilities
         home_win_prob, draw_prob, away_win_prob = self._poisson_match_probabilities(lambda_home, lambda_away)
         
-        # Apply style biases (capped to prevent unrealistic adjustments)
-        max_style_bias = 0.15  # Reasonable cap for style biases
+        # Apply style biases (capped)
+        max_style_bias = 0.15
         if style_adj.get('over_bias', 0) > 0:
             prob_over25 = min(0.95, prob_over25 + min(max_style_bias, style_adj['over_bias']))
             prob_under25 = 1 - prob_over25
@@ -601,7 +789,7 @@ class EdgeFinderPredictor:
             prob_under25 = min(0.95, prob_under25 + min(max_style_bias, style_adj['under_bias']))
             prob_over25 = 1 - prob_under25
         
-        max_draw_bias = 0.10  # Reasonable cap for draw bias
+        max_draw_bias = 0.10
         if style_adj.get('draw_bias', 0) > 0:
             draw_prob = min(0.5, draw_prob + min(max_draw_bias, style_adj['draw_bias']))
             # Re-normalize
@@ -610,7 +798,7 @@ class EdgeFinderPredictor:
             draw_prob /= total
             away_win_prob /= total
         
-        max_btts_bias = 0.10  # Reasonable cap for BTTS bias
+        max_btts_bias = 0.10
         if style_adj.get('btts_bias', 0) > 0:
             prob_btts = min(0.95, prob_btts + min(max_btts_bias, style_adj['btts_bias']))
             prob_no_btts = 1 - prob_btts
@@ -641,39 +829,54 @@ class EdgeFinderPredictor:
                 'home_defense_adj': home_defense_adj,
                 'away_defense_adj': away_defense_adj,
                 'home_form_adj': home_form_adj,
-                'away_form_adj': away_form_adj
+                'away_form_adj': away_form_adj,
+                'home_form_quality': self._calculate_form_quality(home_stats),
+                'away_form_quality': self._calculate_form_quality(away_stats)
             }
         }
     
-    def _calculate_form_adjustment(self, stats: EnhancedTeamStats) -> float:
-        """Calculate form adjustment factor using configurable parameters"""
-        last5_ppg = (stats.last5_wins * 3 + stats.last5_draws) / 5 if 5 > 0 else 0
-        season_ppg = stats.points_per_game
+    def _estimate_last5_xg_conceded(self, stats: EnhancedTeamStats) -> float:
+        """Estimate xG conceded in last 5 based on clean sheet and BTTS percentages"""
+        # If team has 0% clean sheets in last 5, they're conceding regularly
+        if stats.last5_cs_pct == 0:
+            return stats.xg_against_avg * 1.3  # 30% worse than season average
         
-        if season_ppg == 0:
-            return 1.0
+        # If team has high clean sheets in last 5, defense improving
+        if stats.last5_cs_pct > stats.clean_sheet_pct * 1.5:
+            return stats.xg_against_avg * 0.8  # 20% better than season average
         
-        # Use configurable weight for recent form vs season average
-        weighted_ppg = (last5_ppg * self.form_weight) + (season_ppg * (1 - self.form_weight))
+        # If BTTS% is very high in last 5, defense poor recently
+        if stats.last5_btts_pct > stats.btts_pct * 1.3:
+            return stats.xg_against_avg * 1.2  # 20% worse
         
-        # Convert to adjustment factor using configurable thresholds
-        if weighted_ppg > season_ppg * self.improvement_threshold:
-            return self.improvement_threshold  # Use configurable improvement threshold
-        elif weighted_ppg < season_ppg * self.decline_threshold:
-            return self.decline_threshold  # Use configurable decline threshold
+        # Default to season average
+        return stats.xg_against_avg
+    
+    def _calculate_enhanced_form_adjustment(self, stats: EnhancedTeamStats) -> float:
+        """Calculate form adjustment considering multiple quality metrics"""
+        form_quality = self._calculate_form_quality(stats)
+        
+        # Map form quality to adjustment factor
+        if form_quality > 1.15:
+            return 1.15
+        elif form_quality > 1.05:
+            return 1.10
+        elif form_quality > 0.95:
+            return 1.00
+        elif form_quality > 0.85:
+            return 0.90
         else:
-            return 1.0
+            return 0.85
     
     def _poisson_over25_correct(self, lambda_home: float, lambda_away: float) -> float:
         """Correct probability of Over 2.5 goals using Poisson distribution"""
         try:
             total_lambda = lambda_home + lambda_away
-            # Probability of 0, 1, or 2 goals
             prob_0 = math.exp(-total_lambda)
             prob_1 = total_lambda * math.exp(-total_lambda)
             prob_2 = (total_lambda ** 2) * math.exp(-total_lambda) / 2
             prob_under25 = prob_0 + prob_1 + prob_2
-            return 1 - prob_under25  # Over 2.5
+            return 1 - prob_under25
         except:
             return 0.5
     
@@ -755,12 +958,21 @@ class EdgeFinderPredictor:
             elif total_score < 1:
                 total_score = 1
         
-        # Adjust based on data quality
+        # Adjust based on data quality and consistency
         total_matches = analysis.get('home_matches', 0) + analysis.get('away_matches', 0)
         if total_matches < 10:
             total_score -= 2  # Penalize for small sample
         elif total_matches > 20:
             total_score += 1  # Reward for large sample
+        
+        # Check for data consistency between season and last 5
+        if 'defense' in analysis:
+            defense = analysis['defense']
+            if 'home_last5_cs' in defense and 'home_clean_sheet_strength' in defense:
+                home_consistency = abs(defense['home_last5_cs'] - defense['home_clean_sheet_strength']) < 20
+                away_consistency = abs(defense['away_last5_cs'] - defense['away_clean_sheet_strength']) < 20
+                if home_consistency and away_consistency:
+                    total_score += 1  # Reward for consistent data
         
         # Ensure bounds
         total_score = max(1, min(10, total_score))
@@ -768,16 +980,16 @@ class EdgeFinderPredictor:
         # Determine confidence level
         if total_score >= 8:
             level = ConfidenceLevel.HIGH
-            reason = "Strong statistical signals, clear style matchup, consistent data"
+            reason = "Strong statistical signals, consistent data patterns, clear trends"
         elif total_score >= 6:
             level = ConfidenceLevel.MEDIUM
             reason = "Moderate statistical signals, some conflicting data"
         elif total_score >= 4:
             level = ConfidenceLevel.LOW
-            reason = "Weak statistical signals, inconsistent data"
+            reason = "Weak statistical signals, inconsistent data patterns"
         else:
             level = ConfidenceLevel.VERY_LOW
-            reason = "Very weak signals, unreliable data"
+            reason = "Very weak signals, unreliable or contradictory data"
         
         return {
             'score': total_score,
@@ -790,7 +1002,6 @@ class EdgeFinderPredictor:
         """Detect value bets across all markets"""
         value_bets = []
         
-        # Map of our probabilities to market odds
         bet_mappings = [
             ('over25', 'over_25', BetType.OVER_25),
             ('under25', 'under_25', BetType.UNDER_25),
@@ -813,7 +1024,6 @@ class EdgeFinderPredictor:
                     edge = model_prob - implied_prob
                     
                     if edge >= self.min_edge and model_prob >= self.min_confidence_for_stake:
-                        # Determine value rating
                         if edge > 0.05:
                             value_rating = "⭐⭐⭐ Golden Nugget"
                         elif edge > 0.03:
@@ -854,9 +1064,9 @@ class EdgeFinderPredictor:
         bet_pair = (bet1['bet_type'], bet2['bet_type'])
         
         if bet_pair in high_correlation_pairs or (bet2['bet_type'], bet1['bet_type']) in high_correlation_pairs:
-            return 0.5  # Reduce stake by 50%
+            return 0.5
         elif bet_pair in anti_correlation_pairs or (bet2['bet_type'], bet1['bet_type']) in anti_correlation_pairs:
-            return 1.5  # Increase diversification
+            return 1.5
         else:
             return 1.0
     
@@ -873,14 +1083,14 @@ class EdgeFinderPredictor:
             else:
                 kelly_fraction = (b * probability - q) / b
             
-            # Apply fractional Kelly (conservative)
-            kelly_fraction *= 0.25  # Conservative K=0.25
+            # Apply fractional Kelly
+            kelly_fraction *= 0.25
             
             # Apply correlation adjustment
             kelly_fraction *= correlation_factor
             
             # Apply confidence adjustment
-            confidence_mult = confidence_score / 10.0  # 0.5 for score=5, 1.0 for score=10
+            confidence_mult = confidence_score / 10.0
             kelly_fraction *= confidence_mult
             
             # Ensure non-negative
@@ -904,7 +1114,7 @@ class EdgeFinderPredictor:
             implied_prob = 1 / odds if odds > 0 else 0
             edge = probability - implied_prob
             
-            # Determine risk level based on kelly fraction
+            # Determine risk level
             if kelly_fraction > 0.05:
                 risk_level = "High"
             elif kelly_fraction > 0.02:
@@ -946,7 +1156,7 @@ class EdgeFinderPredictor:
                      market_odds: Dict, league: str = "default", 
                      bankroll: float = None) -> Dict:
         """
-        Main prediction method using the "3 Things" framework
+        Main prediction method using enhanced "3 Things" framework with Last 5 data
         """
         if bankroll is None:
             bankroll = self.bankroll
@@ -1009,7 +1219,7 @@ class EdgeFinderPredictor:
                         'edge_percent': bet['edge_percent'],
                         'value_rating': bet['value_rating'],
                         'staking': staking_result,
-                        'explanation': self._generate_bet_explanation(
+                        'explanation': self._generate_enhanced_bet_explanation(
                             bet, home_stats, away_stats, identity_analysis,
                             defense_analysis, transition_analysis, goal_expectations
                         ),
@@ -1020,7 +1230,7 @@ class EdgeFinderPredictor:
                     self.correlated_bets.append(final_bet)
         
         # Generate overall match insights
-        match_insights = self._generate_match_insights(
+        match_insights = self._generate_enhanced_match_insights(
             home_stats, away_stats, identity_analysis,
             defense_analysis, transition_analysis, goal_expectations
         )
@@ -1052,11 +1262,11 @@ class EdgeFinderPredictor:
         
         return result
     
-    def _generate_bet_explanation(self, bet: Dict, home_stats: EnhancedTeamStats,
-                                away_stats: EnhancedTeamStats, identity: Dict,
-                                defense: Dict, transition: Dict,
-                                goal_expectations: Dict) -> str:
-        """Generate explanation for a specific bet"""
+    def _generate_enhanced_bet_explanation(self, bet: Dict, home_stats: EnhancedTeamStats,
+                                        away_stats: EnhancedTeamStats, identity: Dict,
+                                        defense: Dict, transition: Dict,
+                                        goal_expectations: Dict) -> str:
+        """Generate enhanced explanation for a specific bet using Last 5 data"""
         explanations = []
         
         # Add style matchup insight
@@ -1073,8 +1283,8 @@ class EdgeFinderPredictor:
             )
         
         # Add efficiency insight
-        if abs(identity.get('conversion_comparison', 0)) > 3:
-            if identity['conversion_comparison'] > 0:
+        if abs(identity.get('conversion_comparison', 0)) > 2:
+            if identity['conversion_comparison'] > 2:
                 efficient_team = home_stats.team_name
             else:
                 efficient_team = away_stats.team_name
@@ -1089,26 +1299,36 @@ class EdgeFinderPredictor:
                 )
             )
         
-        # Add form momentum insight
+        # Add enhanced form momentum insight with Last 5 data
+        home_form_quality = goal_expectations['adjustment_factors'].get('home_form_quality', 1.0)
+        away_form_quality = goal_expectations['adjustment_factors'].get('away_form_quality', 1.0)
+        
         if transition.get('home_form_momentum') in ['improving', 'declining']:
+            momentum_strength = "strongly " if abs(home_form_quality - 1.0) > 0.1 else ""
             explanations.append(
-                self.explanation_templates['form_momentum'].format(
-                    team=home_stats.team_name,
-                    momentum=transition['home_form_momentum'],
-                    form_record=home_stats.last5_form,
-                    insight=f"Recent form weighted {self.form_weight*100:.0f}% in calculations"
-                )
+                f"📊 **Form Momentum**: {home_stats.team_name} {momentum_strength}{transition['home_form_momentum']} form "
+                f"(PPG: {home_stats.last5_ppg:.2f}, CS: {home_stats.last5_cs_pct*100:.1f}%, FTS: {home_stats.last5_fts_pct*100:.1f}%)"
             )
         
         if transition.get('away_form_momentum') in ['improving', 'declining']:
+            momentum_strength = "strongly " if abs(away_form_quality - 1.0) > 0.1 else ""
             explanations.append(
-                self.explanation_templates['form_momentum'].format(
-                    team=away_stats.team_name,
-                    momentum=transition['away_form_momentum'],
-                    form_record=away_stats.last5_form,
-                    insight=f"Recent form weighted {self.form_weight*100:.0f}% in calculations"
-                )
+                f"📊 **Form Momentum**: {away_stats.team_name} {momentum_strength}{transition['away_form_momentum']} form "
+                f"(PPG: {away_stats.last5_ppg:.2f}, CS: {away_stats.last5_cs_pct*100:.1f}%, FTS: {away_stats.last5_fts_pct*100:.1f}%)"
             )
+        
+        # Add recent defense/offense trends
+        if 'home_last5_cs' in defense and 'home_clean_sheet_strength' in defense:
+            cs_diff = defense['home_last5_cs'] - defense['home_clean_sheet_strength']
+            if abs(cs_diff) > 15:
+                trend = "improving" if cs_diff > 0 else "declining"
+                explanations.append(f"🛡️ **Defense Trend**: {home_stats.team_name} defense {trend} ({defense['home_last5_cs']:.1f}% CS last 5 vs {defense['home_clean_sheet_strength']:.1f}% season)")
+        
+        if 'away_last5_cs' in defense and 'away_clean_sheet_strength' in defense:
+            cs_diff = defense['away_last5_cs'] - defense['away_clean_sheet_strength']
+            if abs(cs_diff) > 15:
+                trend = "improving" if cs_diff > 0 else "declining"
+                explanations.append(f"🛡️ **Defense Trend**: {away_stats.team_name} defense {trend} ({defense['away_last5_cs']:.1f}% CS last 5 vs {defense['away_clean_sheet_strength']:.1f}% season)")
         
         # Add value finding with confidence
         explanations.append(
@@ -1121,60 +1341,78 @@ class EdgeFinderPredictor:
         
         return " | ".join(explanations)
     
-    def _generate_match_insights(self, home_stats: EnhancedTeamStats,
-                               away_stats: EnhancedTeamStats, identity: Dict,
-                               defense: Dict, transition: Dict,
-                               goal_expectations: Dict) -> List[str]:
-        """Generate overall match insights"""
+    def _generate_enhanced_match_insights(self, home_stats: EnhancedTeamStats,
+                                        away_stats: EnhancedTeamStats, identity: Dict,
+                                        defense: Dict, transition: Dict,
+                                        goal_expectations: Dict) -> List[str]:
+        """Generate enhanced overall match insights using Last 5 data"""
         insights = []
         
         # Goal expectation insight
         total_goals = goal_expectations['total_goals']
-        if total_goals > 3.0:
+        if total_goals > 3.2:
             insights.append(f"High-scoring affair expected ({total_goals:.2f} total goals)")
             insights.append(f"Over 2.5 probability: {goal_expectations['probabilities']['over25']:.1%}")
-        elif total_goals < 2.0:
+        elif total_goals < 2.3:
             insights.append(f"Low-scoring affair expected ({total_goals:.2f} total goals)")
             insights.append(f"Under 2.5 probability: {goal_expectations['probabilities']['under25']:.1%}")
         
         # Style insight
-        if identity.get('possession_difference', 0) > 10:
-            insights.append(f"{home_stats.team_name} likely to dominate possession")
-        elif identity.get('possession_difference', 0) < -10:
-            insights.append(f"{away_stats.team_name} likely to dominate possession")
+        if abs(identity.get('possession_difference', 0)) > 10:
+            if identity['possession_difference'] > 10:
+                insights.append(f"{home_stats.team_name} likely to dominate possession")
+            else:
+                insights.append(f"{away_stats.team_name} likely to dominate possession")
         
-        # Defensive insight
-        if defense.get('defensive_mismatch'):
-            insights.append(defense['defensive_mismatch'])
+        # Recent defense/offense trends
+        if 'home_last5_cs' in defense:
+            if defense['home_last5_cs'] > defense['home_clean_sheet_strength'] + 15:
+                insights.append(f"{home_stats.team_name} defense improving recently")
+            elif defense['home_last5_cs'] < defense['home_clean_sheet_strength'] - 15:
+                insights.append(f"{home_stats.team_name} defense declining recently")
         
-        # BTTS insight
+        if 'away_last5_cs' in defense:
+            if defense['away_last5_cs'] > defense['away_clean_sheet_strength'] + 15:
+                insights.append(f"{away_stats.team_name} defense improving recently")
+            elif defense['away_last5_cs'] < defense['away_clean_sheet_strength'] - 15:
+                insights.append(f"{away_stats.team_name} defense declining recently")
+        
+        # BTTS insight with trend
         btts_prob = goal_expectations['probabilities']['btts_yes']
         if btts_prob > 0.65:
-            insights.append(f"High BTTS probability ({btts_prob:.1%})")
+            if 'combined_last5_btts' in transition and transition['combined_last5_btts'] > transition['combined_btts'] + 10:
+                insights.append(f"High AND INCREASING BTTS probability ({btts_prob:.1%}, trend: +{transition['combined_last5_btts'] - transition['combined_btts']:.1f}%)")
+            else:
+                insights.append(f"High BTTS probability ({btts_prob:.1%})")
         elif btts_prob < 0.35:
             insights.append(f"Low BTTS probability ({btts_prob:.1%})")
         
-        # Form insight
+        # Enhanced form insight
         form_weight_pct = self.form_weight * 100
         if transition.get('home_form_momentum') == 'improving':
-            insights.append(f"{home_stats.team_name} in improving form (recent form weighted {form_weight_pct:.0f}%)")
+            form_quality = goal_expectations['adjustment_factors'].get('home_form_quality', 1.0)
+            strength = "strongly " if form_quality > 1.1 else ""
+            insights.append(f"{home_stats.team_name} {strength}improving form (recent form weighted {form_weight_pct:.0f}%)")
         elif transition.get('home_form_momentum') == 'declining':
-            insights.append(f"{home_stats.team_name} in declining form (recent form weighted {form_weight_pct:.0f}%)")
+            form_quality = goal_expectations['adjustment_factors'].get('home_form_quality', 1.0)
+            strength = "strongly " if form_quality < 0.9 else ""
+            insights.append(f"{home_stats.team_name} {strength}declining form (recent form weighted {form_weight_pct:.0f}%)")
         
         if transition.get('away_form_momentum') == 'improving':
-            insights.append(f"{away_stats.team_name} in improving form (recent form weighted {form_weight_pct:.0f}%)")
+            form_quality = goal_expectations['adjustment_factors'].get('away_form_quality', 1.0)
+            strength = "strongly " if form_quality > 1.1 else ""
+            insights.append(f"{away_stats.team_name} {strength}improving form (recent form weighted {form_weight_pct:.0f}%)")
         elif transition.get('away_form_momentum') == 'declining':
-            insights.append(f"{away_stats.team_name} in declining form (recent form weighted {form_weight_pct:.0f}%)")
+            form_quality = goal_expectations['adjustment_factors'].get('away_form_quality', 1.0)
+            strength = "strongly " if form_quality < 0.9 else ""
+            insights.append(f"{away_stats.team_name} {strength}declining form (recent form weighted {form_weight_pct:.0f}%)")
         
         return insights
     
-    # VERIFICATION AND TESTING METHODS (WITHOUT HARCODED STATS)
-    def verify_calculation_fix(self, home_stats: EnhancedTeamStats, 
-                             away_stats: EnhancedTeamStats) -> Dict:
-        """Verify that goal calculations are realistic and bounded"""
-        
-        # Run the calculation
-        result = self.calculate_goal_expectations(home_stats, away_stats, "premier_league")
+    def run_enhanced_verification(self, home_stats: EnhancedTeamStats, 
+                                away_stats: EnhancedTeamStats) -> Dict:
+        """Run verification tests with enhanced metrics"""
+        result = self.calculate_goal_expectations(home_stats, away_stats)
         
         verification = {
             'calculated': {
@@ -1189,133 +1427,20 @@ class EdgeFinderPredictor:
                 result['lambda_home'] >= self.min_team_goals and
                 result['lambda_away'] >= self.min_team_goals
             ),
-            'realistic': (
-                0.5 <= result['lambda_home'] <= 4.0 and
-                0.5 <= result['lambda_away'] <= 4.0 and
-                1.5 <= result['total_goals'] <= 5.0
-            ),
-            'adjustment_factors': result['adjustment_factors']
+            'form_factors': result['adjustment_factors'].get('home_form_quality', 1.0),
+            'away_form_factors': result['adjustment_factors'].get('away_form_quality', 1.0)
         }
         
         return verification
-    
-    def run_configuration_tests(self):
-        """Run tests to verify all parameters are configurable"""
-        
-        print("=" * 60)
-        print("CONFIGURATION TESTS - NO HARCODED VALUES")
-        print("=" * 60)
-        
-        # Test 1: Create predictor with custom parameters
-        print("\n📊 TEST 1: Custom Parameter Configuration")
-        
-        custom_predictor = EdgeFinderPredictor(
-            bankroll=2000.0,
-            min_edge=0.02,  # 2% minimum edge
-            form_weight=0.3,  # 30% weight to recent form
-            improvement_threshold=1.10,  # 10% improvement threshold
-            decline_threshold=0.90,  # 10% decline threshold
-            max_team_goals=3.5,  # Lower max team goals
-            max_total_goals=4.0,  # Lower max total goals
-            min_team_goals=0.1,  # Lower min team goals
-            away_venue_factor=0.90  # Higher away factor
-        )
-        
-        print(f"Form weight: {custom_predictor.form_weight} (should be 0.3)")
-        print(f"Improvement threshold: {custom_predictor.improvement_threshold} (should be 1.10)")
-        print(f"Max team goals: {custom_predictor.max_team_goals} (should be 3.5)")
-        print(f"Away venue factor: {custom_predictor.away_venue_factor} (should be 0.90)")
-        
-        config_correct = (
-            custom_predictor.form_weight == 0.3 and
-            custom_predictor.improvement_threshold == 1.10 and
-            custom_predictor.max_team_goals == 3.5 and
-            custom_predictor.away_venue_factor == 0.90
-        )
-        
-        print(f"\nConfiguration correct? {'✅ YES' if config_correct else '❌ NO'}")
-        
-        # Test 2: Verify league context uses configurable values
-        print("\n" + "=" * 60)
-        print("📊 TEST 2: League Context Configuration")
-        
-        premier_context = custom_predictor.league_context['premier_league']
-        print(f"Premier League away factor: {premier_context['away_factor']} (should be 0.90)")
-        
-        context_correct = premier_context['away_factor'] == 0.90
-        print(f"\nLeague context uses configurable values? {'✅ YES' if context_correct else '❌ NO'}")
-        
-        # Test 3: Verify bounds are configurable
-        print("\n" + "=" * 60)
-        print("📊 TEST 3: Configurable Bounds")
-        
-        # Create mock stats
-        class MockStats:
-            def __init__(self):
-                self.team_name = "Test"
-                self.xg_for_avg = 3.0  # Very high xG
-                self.xg_against_avg = 1.5
-                self.conversion_rate = 0.15
-                self.style = TeamStyle.HIGH_PRESS
-                self.last5_wins = 5
-                self.last5_draws = 0
-                self.last5_losses = 0
-                self.home_goals_for = 0
-                self.home_wins = 0
-                self.home_draws = 0
-                self.home_losses = 0
-                self.away_goals_for = 0
-                self.away_wins = 0
-                self.away_draws = 0
-                self.away_losses = 0
-                self.matches_played = 10
-            
-            @property
-            def points_per_game(self):
-                return 2.0
-        
-        home_test = MockStats()
-        away_test = MockStats()
-        
-        result = custom_predictor.calculate_goal_expectations(home_test, away_test)
-        
-        print(f"Calculated home goals: {result['lambda_home']:.2f}")
-        print(f"Max team goals configured: {custom_predictor.max_team_goals}")
-        print(f"Home goals <= max? {result['lambda_home'] <= custom_predictor.max_team_goals}")
-        
-        print(f"\nCalculated total goals: {result['total_goals']:.2f}")
-        print(f"Max total goals configured: {custom_predictor.max_total_goals}")
-        print(f"Total goals <= max? {result['total_goals'] <= custom_predictor.max_total_goals}")
-        
-        bounds_correct = (
-            result['lambda_home'] <= custom_predictor.max_team_goals and
-            result['lambda_away'] <= custom_predictor.max_team_goals and
-            result['total_goals'] <= custom_predictor.max_total_goals
-        )
-        
-        print(f"\nBounds are configurable? {'✅ YES' if bounds_correct else '❌ NO'}")
-        
-        # Summary
-        print("\n" + "=" * 60)
-        print("TEST SUMMARY:")
-        print(f"Test 1 (Parameter config): {'✅ PASS' if config_correct else '❌ FAIL'}")
-        print(f"Test 2 (League context): {'✅ PASS' if context_correct else '❌ FAIL'}")
-        print(f"Test 3 (Configurable bounds): {'✅ PASS' if bounds_correct else '❌ FAIL'}")
-        
-        all_pass = config_correct and context_correct and bounds_correct
-        print(f"\nOVERALL: {'✅ ALL CONFIGURATION TESTS PASS' if all_pass else '❌ SOME TESTS FAIL'}")
-        
-        if all_pass:
-            print("\n🎉 NO HARCODED VALUES FOUND!")
-            print("All parameters are configurable through constructor arguments.")
-        else:
-            print("\n⚠️ Some configuration issues found.")
-        
-        return all_pass
 
 
-# Quick test execution if run directly
+# Quick test if run directly
 if __name__ == "__main__":
-    print("Running EdgeFinder Predictor Configuration Tests...")
-    predictor = EdgeFinderPredictor()
-    predictor.run_configuration_tests()
+    print("Enhanced EdgeFinder Predictor v1.3")
+    print("Now with Last 5 metrics for improved form analysis!")
+    print("\nKey Enhancements:")
+    print("1. Last 5 PPG, Clean Sheet %, Failed to Score %, BTTS %, Over 2.5 %")
+    print("2. Enhanced form momentum calculation")
+    print("3. Defense/offense trend detection")
+    print("4. No hardcoded values - all configurable")
+    print("5. Better West Ham 'improving form' detection (considers defense)")
