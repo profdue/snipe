@@ -8,6 +8,7 @@ from models.edgefinder_predictor import EdgeFinderPredictor, EnhancedTeamStats, 
 
 class EdgeFinderFootballApp:
     def __init__(self):
+        # Don't initialize predictor here - it needs sidebar values
         self.predictor = None
         self.leagues = {}
         self.market_templates = self.load_market_templates()
@@ -216,9 +217,6 @@ class EdgeFinderFootballApp:
             initial_sidebar_state="expanded"
         )
         
-        # Initialize predictor - FIXED: Now we'll create it later with updated parameters
-        # Don't initialize here - wait until we have user settings
-        
         # Load leagues
         self.leagues = self.load_leagues()
         
@@ -303,6 +301,10 @@ class EdgeFinderFootballApp:
         </div>
         """, unsafe_allow_html=True)
         
+        # Initialize session state for predictor if it doesn't exist
+        if 'predictor_initialized' not in st.session_state:
+            st.session_state.predictor_initialized = False
+        
         # Sidebar
         with st.sidebar:
             st.header("⚙️ Match Configuration")
@@ -328,20 +330,81 @@ class EdgeFinderFootballApp:
                 away_options = [t for t in team_names if t != home_team]
                 away_team = st.selectbox("✈️ Away Team", away_options)
             
-            # Advanced predictor settings
+            # Advanced predictor settings - Use session state to preserve values
             st.subheader("⚡ Predictor Configuration")
             
+            # Set default values in session state if not set
+            if 'form_weight' not in st.session_state:
+                st.session_state.form_weight = 0.4
+            if 'improvement_threshold' not in st.session_state:
+                st.session_state.improvement_threshold = 1.15
+            if 'decline_threshold' not in st.session_state:
+                st.session_state.decline_threshold = 0.85
+            if 'away_venue_factor' not in st.session_state:
+                st.session_state.away_venue_factor = 0.85
+            if 'max_team_goals' not in st.session_state:
+                st.session_state.max_team_goals = 4.0
+            if 'max_total_goals' not in st.session_state:
+                st.session_state.max_total_goals = 4.5
+            if 'min_team_goals' not in st.session_state:
+                st.session_state.min_team_goals = 0.2
+            
             with st.expander("Advanced Settings"):
-                # Model parameters
-                form_weight = st.slider("Form Weight %", 20, 60, 40, 5) / 100.0
-                improvement_threshold = st.slider("Improvement Threshold %", 5, 25, 15, 1) / 100.0 + 1.0
-                decline_threshold = 1.0 - st.slider("Decline Threshold %", 5, 25, 15, 1) / 100.0
-                away_venue_factor = st.slider("Away Venue Factor %", 70, 95, 85, 5) / 100.0
+                # Model parameters - update session state when changed
+                form_weight = st.slider(
+                    "Form Weight %", 
+                    20, 60, int(st.session_state.form_weight * 100), 5,
+                    on_change=lambda: st.session_state.update({
+                        'form_weight': st.session_state.form_weight_slider / 100.0
+                    }),
+                    key="form_weight_slider"
+                ) / 100.0
+                
+                improvement_threshold = st.slider(
+                    "Improvement Threshold %", 
+                    5, 25, int((st.session_state.improvement_threshold - 1) * 100), 1,
+                    on_change=lambda: st.session_state.update({
+                        'improvement_threshold': (st.session_state.improvement_slider / 100.0) + 1.0
+                    }),
+                    key="improvement_slider"
+                ) / 100.0 + 1.0
+                
+                decline_threshold = 1.0 - st.slider(
+                    "Decline Threshold %", 
+                    5, 25, int((1 - st.session_state.decline_threshold) * 100), 1,
+                    on_change=lambda: st.session_state.update({
+                        'decline_threshold': 1.0 - (st.session_state.decline_slider / 100.0)
+                    }),
+                    key="decline_slider"
+                ) / 100.0
+                
+                away_venue_factor = st.slider(
+                    "Away Venue Factor %", 
+                    70, 95, int(st.session_state.away_venue_factor * 100), 5,
+                    on_change=lambda: st.session_state.update({
+                        'away_venue_factor': st.session_state.away_venue_slider / 100.0
+                    }),
+                    key="away_venue_slider"
+                ) / 100.0
                 
                 # Goal expectation bounds
-                max_team_goals = st.slider("Max Goals Per Team", 3.0, 5.0, 4.0, 0.1)
-                max_total_goals = st.slider("Max Total Goals", 3.5, 6.0, 4.5, 0.1)
-                min_team_goals = st.slider("Min Goals Per Team", 0.1, 0.5, 0.2, 0.05)
+                max_team_goals = st.slider(
+                    "Max Goals Per Team", 
+                    3.0, 5.0, st.session_state.max_team_goals, 0.1,
+                    key="max_team_goals_slider"
+                )
+                
+                max_total_goals = st.slider(
+                    "Max Total Goals", 
+                    3.5, 6.0, st.session_state.max_total_goals, 0.1,
+                    key="max_total_goals_slider"
+                )
+                
+                min_team_goals = st.slider(
+                    "Min Goals Per Team", 
+                    0.1, 0.5, st.session_state.min_team_goals, 0.05,
+                    key="min_team_goals_slider"
+                )
             
             # Market odds - PROPERLY ORGANIZED
             st.subheader("💰 Market Odds")
@@ -417,23 +480,9 @@ class EdgeFinderFootballApp:
             min_edge = st.slider("Minimum Edge %", 1.0, 10.0, 3.0, 0.5) / 100
             max_exposure = st.slider("Max Correlation Exposure %", 5.0, 20.0, 10.0, 1.0) / 100
             
-            # Initialize predictor with ALL parameters - FIXED
-            self.predictor = EdgeFinderPredictor(
-                bankroll=bankroll,
-                min_edge=min_edge,
-                max_correlation_exposure=max_exposure,
-                form_weight=form_weight,
-                improvement_threshold=improvement_threshold,
-                decline_threshold=decline_threshold,
-                max_team_goals=max_team_goals,
-                max_total_goals=max_total_goals,
-                min_team_goals=min_team_goals,
-                away_venue_factor=away_venue_factor
-            )
-            
             # Logic framework display
             with st.expander("📚 Logic Framework"):
-                st.markdown("""
+                st.markdown(f"""
                 ### THE "3 THINGS" ANALYTICAL FRAMEWORK
                 
                 1. **TEAM IDENTITY** (What they ARE)
@@ -458,15 +507,30 @@ class EdgeFinderFootballApp:
                 2. Double Chance (Home or Draw / Away or Draw)
                 3. Goals Markets (Over/Under 2.5)
                 4. BTTS Markets (Yes/No)
-                """.format(form_weight=form_weight))
+                """)
             
             # Analyze button
             analyze_btn = st.button("🔍 Analyze Match", type="primary", use_container_width=True)
         
         # Main content
         if analyze_btn:
-            # Get team data
+            # Initialize predictor ONLY when analyze is clicked
             try:
+                # Use values from session state
+                self.predictor = EdgeFinderPredictor(
+                    bankroll=bankroll,
+                    min_edge=min_edge,
+                    max_correlation_exposure=max_exposure,
+                    form_weight=st.session_state.form_weight,
+                    improvement_threshold=st.session_state.improvement_threshold,
+                    decline_threshold=st.session_state.decline_threshold,
+                    max_team_goals=st.session_state.max_team_goals,
+                    max_total_goals=st.session_state.max_total_goals,
+                    min_team_goals=st.session_state.min_team_goals,
+                    away_venue_factor=st.session_state.away_venue_factor
+                )
+                
+                # Get team data
                 home_data = teams_df[teams_df['team_name'] == home_team].iloc[0]
                 away_data = teams_df[teams_df['team_name'] == away_team].iloc[0]
                 
@@ -488,7 +552,7 @@ class EdgeFinderFootballApp:
                     )
                 
                 # Display results
-                self.display_results(result, home_stats, away_stats, form_weight)
+                self.display_results(result, home_stats, away_stats, st.session_state.form_weight)
                 
             except Exception as e:
                 st.error(f"Error analyzing match: {str(e)}")
@@ -704,7 +768,7 @@ class EdgeFinderFootballApp:
             for insight in analysis['match_insights']:
                 st.info(f"• {insight}")
         
-        # Goal expectations - FIXED: Use correct adjustment factor names
+        # Goal expectations
         goal_exp = analysis['goal_expectations']
         st.markdown("### ⚽ Goal Expectations")
         
@@ -721,7 +785,7 @@ class EdgeFinderFootballApp:
             avg_gpg = self.predictor.league_context.get('premier_league', {}).get('avg_gpg', 2.7)
             st.caption(f"League Average: {avg_gpg}")
         
-        # Show adjustment factors - FIXED: Use correct keys
+        # Show adjustment factors
         with st.expander("🔧 Goal Expectation Adjustments"):
             adj_factors = goal_exp['adjustment_factors']
             col1, col2 = st.columns(2)
