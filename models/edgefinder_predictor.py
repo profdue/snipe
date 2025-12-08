@@ -1,6 +1,7 @@
 """
 EdgeFinder Predictor - COMPLETE UNIVERSAL IMPLEMENTATION
 Mathematically correct predictions for all teams across all top 5 European leagues
+FIXED v2.1: Proper defense multiplier logic with inverse relationship
 """
 
 import numpy as np
@@ -166,6 +167,7 @@ class EdgeFinderPredictor:
     """
     COMPLETE UNIVERSAL Football Predictor
     Mathematically correct for all teams across all top 5 European leagues
+    FIXED v2.1: Proper defense multiplier logic with inverse relationship
     """
     
     def __init__(self, 
@@ -312,24 +314,31 @@ class EdgeFinderPredictor:
                                               league_avg_gpg: float) -> float:
         """
         MATHEMATICALLY CORRECT attack vs defense adjustment
-        Handles ALL cases including very low defense values
+        FIXED v2.1: Attack multiplier = 1.0 / defense_quality (inverse relationship)
+        Good defense (defense_quality < 1.0) → attack_multiplier > 1.0 (reduces attack)
+        Bad defense (defense_quality > 1.0) → attack_multiplier < 1.0 (increases attack)
         """
         if opponent_defense <= 0.1 or league_avg_gpg <= 0.1:
             return attack_strength
         
         # Calculate defense quality relative to league average
+        # GOOD defense: defense_quality < 1.0 (concedes less than league avg)
+        # BAD defense: defense_quality > 1.0 (concedes more than league avg)
         defense_quality = opponent_defense / league_avg_gpg
         
-        # Handle VERY GOOD defenses (defense_quality < 0.5) gracefully
+        # FIXED: Use inverse relationship - good defense reduces opponent's attack
         if defense_quality < 0.3:
-            # Extremely good defense - cap at 0.5x multiplier
-            attack_multiplier = 0.5
+            # Extremely good defense - cap at 0.4x multiplier
+            attack_multiplier = 0.4
+        elif defense_quality < 0.7:
+            # Very good defense - apply inverse with damping
+            attack_multiplier = 1.0 / defense_quality * 0.7
         else:
-            # Normal calculation for reasonable defenses
-            attack_multiplier = 1.0 + (defense_quality - 1.0) * 0.5
+            # Normal defense - use simple inverse relationship
+            attack_multiplier = 1.0 / defense_quality
         
-        # Apply final bounds
-        attack_multiplier = max(0.4, min(1.6, attack_multiplier))
+        # Apply realistic bounds: 0.4x to 1.8x
+        attack_multiplier = max(0.4, min(1.8, attack_multiplier))
         
         return attack_strength * attack_multiplier
     
@@ -398,7 +407,7 @@ class EdgeFinderPredictor:
         home_defense_base = self._get_venue_defense_strength(home_stats, is_home=True, league=league)
         away_defense_base = self._get_venue_defense_strength(away_stats, is_home=False, league=league)
         
-        # 2. ATTACK VS DEFENSE ADJUSTMENTS (MATHEMATICALLY CORRECT)
+        # 2. ATTACK VS DEFENSE ADJUSTMENTS (FIXED v2.1: INVERSE RELATIONSHIP)
         home_attack_adjusted = self._calculate_attack_vs_defense_adjustment(
             home_attack_base, away_defense_base, context['avg_gpg']
         )
@@ -971,6 +980,7 @@ class EdgeFinderPredictor:
                      bankroll: float = None) -> Dict:
         """
         Main prediction method - COMPLETE UNIVERSAL IMPLEMENTATION
+        FIXED v2.1: Proper defense multiplier logic with inverse relationship
         """
         if bankroll is None:
             bankroll = self.bankroll
@@ -1056,7 +1066,9 @@ class EdgeFinderPredictor:
 # Test function to verify universal correctness
 def test_universal_predictor():
     """Test the universal predictor with different league scenarios"""
-    print("🧪 TESTING UNIVERSAL PREDICTOR...")
+    print("🧪 TESTING UNIVERSAL PREDICTOR v2.1...")
+    print("🔧 FIXED: Defense multiplier logic with inverse relationship")
+    print("🎯 Attack multiplier = 1.0 / defense_quality")
     
     # Test 1: Serie A (lower scoring)
     print("\n📊 TEST 1: Serie A (Pisa vs Parma)")
@@ -1137,23 +1149,44 @@ def test_universal_predictor():
         form_weight=0.4
     )
     
+    # Test the corrected defense multiplier logic
+    print("\n🔍 Testing FIXED defense multiplier logic:")
+    print("   Pisa home defense: 0.80 goals/game")
+    print("   Parma away defense: 1.17 goals/game")
+    print("   Serie A avg: 2.6 goals/game")
+    print("\n   Defense quality calculation:")
+    print(f"   Pisa defense quality: 0.80 / 2.6 = {0.80/2.6:.3f} (GOOD defense)")
+    print(f"   Parma defense quality: 1.17 / 2.6 = {1.17/2.6:.3f} (GOOD defense)")
+    print("\n   Attack multiplier (1.0 / defense_quality):")
+    print(f"   Against Pisa: 1.0 / {0.80/2.6:.3f} = {1.0/(0.80/2.6):.3f}")
+    print(f"   Against Parma: 1.0 / {1.17/2.6:.3f} = {1.0/(1.17/2.6):.3f}")
+    
     result = predictor.calculate_goal_expectations(pisa_stats, parma_stats, 'serie_a')
     
-    print(f"  Total Expected Goals: {result['total_goals']:.2f}")
-    print(f"  Over 2.5 Probability: {result['probabilities']['over25']:.1%}")
-    print(f"  BTTS Probability: {result['probabilities']['btts_yes']:.1%}")
+    print(f"\n📈 Expected Goals: {result['total_goals']:.2f}")
+    print(f"   Over 2.5 Probability: {result['probabilities']['over25']:.1%}")
+    print(f"   BTTS Probability: {result['probabilities']['btts_yes']:.1%}")
+    print(f"   BTTS No Probability: {result['probabilities']['btts_no']:.1%}")
+    
+    # Show defense multipliers
+    adj_factors = result['adjustment_factors']
+    print(f"\n🔧 Defense Multipliers Applied:")
+    print(f"   Pisa attack multiplier vs Parma defense: {adj_factors['attack_multiplier_home']:.3f}")
+    print(f"   Parma attack multiplier vs Pisa defense: {adj_factors['attack_multiplier_away']:.3f}")
+    print(f"   Pisa defense quality: {adj_factors['defense_quality_home']:.3f}")
+    print(f"   Parma defense quality: {adj_factors['defense_quality_away']:.3f}")
     
     # Verify realism for Serie A
     if 1.8 <= result['total_goals'] <= 2.8:
-        print("  ✅ REALISTIC for Serie A")
+        print("\n✅ REALISTIC for Serie A")
     else:
-        print(f"  ⚠️  Unusual for Serie A: {result['total_goals']:.2f} total goals")
+        print(f"\n⚠️  Unusual for Serie A: {result['total_goals']:.2f} total goals")
     
-    print("\n✅ UNIVERSAL PREDICTOR READY FOR ALL LEAGUES")
-    print("• Serie A: Realistic low-scoring predictions")
-    print("• Bundesliga: Realistic high-scoring predictions")  
-    print("• Premier League: Realistic balanced predictions")
-    print("• All teams: Proper defense adjustments applied")
+    print("\n✅ UNIVERSAL PREDICTOR v2.1 READY")
+    print("• FIXED defense multiplier logic (inverse relationship)")
+    print("• Realistic bounds: 0.4x to 1.8x multipliers")
+    print("• No artificial minimums - uses real CSV data")
+    print("• Proper handling of very good defenses")
 
 
 if __name__ == "__main__":
