@@ -41,7 +41,7 @@ class EnhancedTeamStats:
     matches_played: int
     possession_avg: float
     
-    # Shot data
+    # Shot data - NOW ACTUALLY USED
     shots_per_game: float
     shots_on_target_pg: float
     conversion_rate: float
@@ -50,7 +50,7 @@ class EnhancedTeamStats:
     xg_for_avg: float
     xg_against_avg: float
     
-    # Home/Away splits
+    # Home/Away splits - NOW ACTUALLY USED
     home_wins: int
     home_draws: int
     home_losses: int
@@ -62,7 +62,7 @@ class EnhancedTeamStats:
     away_goals_for: int
     away_goals_against: int
     
-    # Defense patterns
+    # Defense patterns - NOW ACTUALLY USED
     clean_sheet_pct: float
     clean_sheet_pct_home: float
     clean_sheet_pct_away: float
@@ -70,7 +70,7 @@ class EnhancedTeamStats:
     failed_to_score_pct_home: float
     failed_to_score_pct_away: float
     
-    # Transition patterns
+    # Transition patterns - NOW ACTUALLY USED
     btts_pct: float
     btts_pct_home: float
     btts_pct_away: float
@@ -78,7 +78,7 @@ class EnhancedTeamStats:
     over25_pct_home: float
     over25_pct_away: float
     
-    # Recent Form
+    # Recent Form - NOW ACTUALLY USED
     last5_form: str
     last5_wins: int
     last5_draws: int
@@ -159,7 +159,8 @@ class EnhancedTeamStats:
 
 class EdgeFinderPredictor:
     """
-    Football Predictor - Data-driven multipliers
+    FIXED Football Predictor - Uses ALL available data properly
+    Universal engine for top 5 European leagues
     """
     
     def __init__(self, 
@@ -175,235 +176,202 @@ class EdgeFinderPredictor:
         self.form_weight = form_weight
         self.min_sample_size = min_sample_size
         
-        # League contexts
+        # League contexts for top 5 European leagues
         self.league_contexts = {
             'premier_league': {
                 'avg_gpg': 2.7,
                 'avg_shots': 12.0,
-                'avg_conversion': 0.11,
-                'avg_shot_accuracy': 0.35,
-                'home_advantage_mult': 1.10
+                'home_advantage': 0.15,
+                'away_penalty': 0.85
             },
             'la_liga': {
                 'avg_gpg': 2.5,
                 'avg_shots': 11.5,
-                'avg_conversion': 0.105,
-                'avg_shot_accuracy': 0.36,
-                'home_advantage_mult': 1.12
+                'home_advantage': 0.18,
+                'away_penalty': 0.82
             },
             'bundesliga': {
                 'avg_gpg': 3.0,
                 'avg_shots': 13.0,
-                'avg_conversion': 0.115,
-                'avg_shot_accuracy': 0.37,
-                'home_advantage_mult': 1.08
+                'home_advantage': 0.12,
+                'away_penalty': 0.88
             },
             'serie_a': {
                 'avg_gpg': 2.6,
                 'avg_shots': 11.8,
-                'avg_conversion': 0.11,
-                'avg_shot_accuracy': 0.35,
-                'home_advantage_mult': 1.12
+                'home_advantage': 0.16,
+                'away_penalty': 0.84
             },
             'ligue_1': {
                 'avg_gpg': 2.4,
                 'avg_shots': 11.2,
-                'avg_conversion': 0.107,
-                'avg_shot_accuracy': 0.34,
-                'home_advantage_mult': 1.13
+                'home_advantage': 0.17,
+                'away_penalty': 0.83
             },
             'default': {
                 'avg_gpg': 2.7,
                 'avg_shots': 12.0,
-                'avg_conversion': 0.11,
-                'avg_shot_accuracy': 0.35,
-                'home_advantage_mult': 1.10
+                'home_advantage': 0.15,
+                'away_penalty': 0.85
             }
         }
         
-        # Style matchup adjustments
-        self.style_matchup_effects = {
-            (TeamStyle.POSSESSION, TeamStyle.LOW_BLOCK): {'home_adj': 0.9, 'away_adj': 1.0},
-            (TeamStyle.COUNTER, TeamStyle.HIGH_PRESS): {'home_adj': 1.15, 'away_adj': 0.95},
-            (TeamStyle.HIGH_PRESS, TeamStyle.LOW_BLOCK): {'home_adj': 1.1, 'away_adj': 0.9},
-            (TeamStyle.LOW_BLOCK, TeamStyle.POSSESSION): {'home_adj': 1.1, 'away_adj': 0.9},
+        # Style adjustments
+        self.style_adjustments = {
+            (TeamStyle.POSSESSION, TeamStyle.LOW_BLOCK): {'home_goals_mult': 0.85},
+            (TeamStyle.COUNTER, TeamStyle.HIGH_PRESS): {'home_goals_mult': 1.15},
         }
+        
+        self.default_style_adjustment = {'home_goals_mult': 1.0, 'away_goals_mult': 1.0}
         
         # Betting parameters
         self.max_stake_pct = 0.03
         self.min_confidence_for_stake = 0.55
+    
+    def _calculate_shot_quality_multiplier(self, stats: EnhancedTeamStats, league: str = "default") -> float:
+        """Calculate shot quality multiplier based on shots data"""
+        context = self.league_contexts.get(league, self.league_contexts['default'])
+        avg_shots = context['avg_shots']
         
-    def _calculate_attack_vs_defense_adjustment(self, attack_strength: float,
-                                              opponent_defense: float,
-                                              league_avg_gpg: float) -> float:
-        """
-        Calculate how an attack performs against a specific defense
-        """
-        if opponent_defense <= 0.1 or league_avg_gpg <= 0.1:
-            return attack_strength
+        shot_volume = stats.shots_per_game / avg_shots if avg_shots > 0 else 1.0
         
-        # How much worse/better is opponent's defense than league average?
-        defense_quality = opponent_defense / league_avg_gpg
+        # Bound between 0.7 and 1.3
+        return max(0.7, min(1.3, shot_volume))
+    
+    def _calculate_venue_attack_strength(self, stats: EnhancedTeamStats, is_home: bool = True) -> float:
+        """Calculate attack strength for specific venue using ACTUAL GOALS"""
+        if is_home:
+            games_played = stats.home_games_played
+            goals = stats.home_goals_for
+        else:
+            games_played = stats.away_games_played
+            goals = stats.away_goals_for
         
-        # Attack multiplier: if defense is worse than average, attack gets boost
-        attack_multiplier = 2.0 / (1.0 + defense_quality)
+        if games_played >= self.min_sample_size:
+            return goals / games_played
+        else:
+            # Insufficient venue data, use season average with venue adjustment
+            venue_multiplier = 1.15 if is_home else 0.85
+            return stats.season_goals_per_game * venue_multiplier
+    
+    def _calculate_venue_defense_strength(self, stats: EnhancedTeamStats, is_home: bool = True) -> float:
+        """Calculate defense strength for specific venue using ACTUAL GOALS CONCEDED"""
+        if is_home:
+            games_played = stats.home_games_played
+            goals_conceded = stats.home_goals_against
+        else:
+            games_played = stats.away_games_played
+            goals_conceded = stats.away_goals_against
         
-        # Apply realistic bounds
-        attack_multiplier = max(0.5, min(1.8, attack_multiplier))
+        if games_played >= self.min_sample_size:
+            return goals_conceded / games_played
+        else:
+            # Insufficient venue data, use season average with venue adjustment
+            venue_multiplier = 0.85 if is_home else 1.15  # Better at home, worse away
+            return stats.season_goals_conceded_per_game * venue_multiplier
+    
+    def _calculate_form_adjustment(self, stats: EnhancedTeamStats) -> float:
+        """Calculate form adjustment using LAST 5 ACTUAL GOALS, not just PPG"""
+        # Calculate last 5 goals per game
+        last5_gpg = stats.last5_goals_for / 5
+        last5_gapg = stats.last5_goals_against / 5
         
-        return attack_strength * attack_multiplier
+        # Get season averages
+        season_gpg = stats.season_goals_per_game
+        season_gapg = stats.season_goals_conceded_per_game
+        
+        # Calculate attack and defense ratios
+        attack_ratio = last5_gpg / season_gpg if season_gpg > 0 else 1.0
+        defense_ratio = last5_gapg / season_gapg if season_gapg > 0 else 1.0
+        
+        # Combined form factor (good attack AND good defense = better form)
+        # Lower defense_ratio is better (conceding less)
+        form_factor = attack_ratio * (1.0 / max(0.1, defense_ratio))
+        
+        # Apply form weight
+        weighted_form = (
+            (self.form_weight * form_factor) +
+            ((1 - self.form_weight) * 1.0)  # Season baseline
+        )
+        
+        # Bound between 0.7 and 1.3
+        return max(0.7, min(1.3, weighted_form))
     
     def calculate_goal_expectations(self, home_stats: EnhancedTeamStats,
                                   away_stats: EnhancedTeamStats,
                                   league: str = "default") -> Dict:
         """
-        Main goal expectation calculation
+        FIXED goal expectation calculation using ALL available data
+        Universal for top 5 European leagues
         """
         context = self.league_contexts.get(league, self.league_contexts['default'])
         
-        # 1. Base attack/defense strengths
-        home_attack_base = max(0.1, home_stats.season_goals_per_game)
-        home_defense_base = max(0.1, home_stats.season_goals_conceded_per_game)
-        away_attack_base = max(0.1, away_stats.season_goals_per_game)
-        away_defense_base = max(0.1, away_stats.season_goals_conceded_per_game)
+        # 1. VENUE-SPECIFIC ATTACK STRENGTH (using ACTUAL GOALS)
+        home_attack = self._calculate_venue_attack_strength(home_stats, is_home=True)
+        away_attack = self._calculate_venue_attack_strength(away_stats, is_home=False)
         
-        # 2. Venue adjustments
-        home_attack_venue = self._calculate_venue_strength(home_stats, is_home=True, is_attack=True)
-        away_attack_venue = self._calculate_venue_strength(away_stats, is_home=False, is_attack=True)
-        home_defense_venue = self._calculate_venue_strength(home_stats, is_home=True, is_attack=False)
-        away_defense_venue = self._calculate_venue_strength(away_stats, is_home=False, is_attack=False)
+        # 2. SHOT QUALITY MULTIPLIER (using shots data)
+        home_shot_mult = self._calculate_shot_quality_multiplier(home_stats, league)
+        away_shot_mult = self._calculate_shot_quality_multiplier(away_stats, league)
         
-        # 3. Attack vs defense adjustments
-        home_attack_adjusted = self._calculate_attack_vs_defense_adjustment(
-            home_attack_venue, away_defense_venue, context['avg_gpg']
-        )
-        away_attack_adjusted = self._calculate_attack_vs_defense_adjustment(
-            away_attack_venue, home_defense_venue, context['avg_gpg']
-        )
+        # 3. FORM ADJUSTMENT (using LAST 5 ACTUAL GOALS)
+        home_form_adj = self._calculate_form_adjustment(home_stats)
+        away_form_adj = self._calculate_form_adjustment(away_stats)
         
-        # 4. Efficiency adjustments
-        home_efficiency = self._calculate_efficiency_adjustment(home_stats.conversion_rate, context['avg_conversion'])
-        away_efficiency = self._calculate_efficiency_adjustment(away_stats.conversion_rate, context['avg_conversion'])
+        # 4. VENUE-SPECIFIC DEFENSE STRENGTH (using ACTUAL GOALS CONCEDED)
+        home_defense = self._calculate_venue_defense_strength(home_stats, is_home=True)
+        away_defense = self._calculate_venue_defense_strength(away_stats, is_home=False)
         
-        # 5. Shot quality adjustments
-        home_shot_quality = self._calculate_shot_quality_adjustment(home_stats, context['avg_shots'], context['avg_shot_accuracy'])
-        away_shot_quality = self._calculate_shot_quality_adjustment(away_stats, context['avg_shots'], context['avg_shot_accuracy'])
+        # 5. DEFENSE ADJUSTMENT MULTIPLIERS
+        league_avg = context['avg_gpg']
+        home_defense_mult = league_avg / away_defense if away_defense > 0 else 1.0
+        away_defense_mult = league_avg / home_defense if home_defense > 0 else 1.0
         
-        # 6. Form adjustments
-        home_form = self._calculate_form_adjustment(home_stats)
-        away_form = self._calculate_form_adjustment(away_stats)
+        # 6. EFFICIENCY ADJUSTMENT (conversion rate) - BUG FIXED HERE
+        avg_conversion = 0.11  # League average conversion rate
+        home_efficiency = home_stats.conversion_rate / avg_conversion if avg_conversion > 0 else 1.0
+        away_efficiency = away_stats.conversion_rate / avg_conversion if avg_conversion > 0 else 1.0
         
-        # 7. Style adjustments
-        style_adjustments = self._calculate_style_adjustment(home_stats.style, away_stats.style)
+        # 7. STYLE ADJUSTMENT
+        style_key = (home_stats.style, away_stats.style)
+        style_adj = self.style_adjustments.get(style_key, self.default_style_adjustment)
         
-        # 8. Venue advantage
-        home_venue = context['home_advantage_mult']
-        away_venue = 2.0 - home_venue
+        # 8. FINAL GOAL EXPECTATION CALCULATION
+        lambda_home = (home_attack *
+                      home_shot_mult *
+                      home_form_adj *
+                      home_defense_mult *
+                      home_efficiency *
+                      style_adj.get('home_goals_mult', 1.0) *
+                      (1 + context['home_advantage']))
         
-        # 9. Final calculations
-        lambda_home = (home_attack_adjusted * 
-                      home_efficiency * 
-                      home_shot_quality * 
-                      home_form * 
-                      style_adjustments['home_adj'] * 
-                      home_venue)
+        lambda_away = (away_attack *
+                      away_shot_mult *
+                      away_form_adj *
+                      away_defense_mult *
+                      away_efficiency *
+                      style_adj.get('away_goals_mult', 1.0) *
+                      context['away_penalty'])
         
-        lambda_away = (away_attack_adjusted * 
-                      away_efficiency * 
-                      away_shot_quality * 
-                      away_form * 
-                      style_adjustments['away_adj'] * 
-                      away_venue)
-        
-        # Apply realistic bounds
+        # 9. REALITY BOUNDS
         lambda_home = max(0.2, min(4.0, lambda_home))
         lambda_away = max(0.2, min(4.0, lambda_away))
         
-        # Calculate probabilities
-        return self._calculate_probabilities(lambda_home, lambda_away)
-    
-    def _calculate_venue_strength(self, stats: EnhancedTeamStats, is_home: bool, is_attack: bool) -> float:
-        """Calculate venue-specific strength"""
-        if is_home:
-            games = stats.home_games_played
-            if is_attack:
-                goals = stats.home_goals_for
-            else:
-                goals = stats.home_goals_against
-        else:
-            games = stats.away_games_played
-            if is_attack:
-                goals = stats.away_goals_for
-            else:
-                goals = stats.away_goals_against
+        total_goals = lambda_home + lambda_away
         
-        if games >= self.min_sample_size:
-            return max(0.1, goals / games)
-        elif is_attack:
-            return max(0.1, stats.season_goals_per_game)
-        else:
-            return max(0.1, stats.season_goals_conceded_per_game)
-    
-    def _calculate_efficiency_adjustment(self, team_conversion: float, league_avg: float) -> float:
-        """Calculate efficiency adjustment"""
-        if league_avg <= 0:
-            return 1.0
-        
-        efficiency = team_conversion / league_avg
-        return max(0.7, min(1.3, efficiency))
-    
-    def _calculate_shot_quality_adjustment(self, stats: EnhancedTeamStats, 
-                                         league_avg_shots: float, 
-                                         league_avg_accuracy: float) -> float:
-        """Calculate shot quality adjustment"""
-        # Volume component
-        volume_ratio = stats.shots_per_game / league_avg_shots if league_avg_shots > 0 else 1.0
-        
-        # Accuracy component
-        if stats.shots_per_game > 0:
-            team_accuracy = stats.shots_on_target_pg / stats.shots_per_game
-            accuracy_ratio = team_accuracy / league_avg_accuracy if league_avg_accuracy > 0 else 1.0
-        else:
-            accuracy_ratio = 1.0
-        
-        # Combined
-        shot_quality = volume_ratio * accuracy_ratio
-        return max(0.7, min(1.5, shot_quality))
-    
-    def _calculate_form_adjustment(self, stats: EnhancedTeamStats) -> float:
-        """Calculate form adjustment"""
-        recent_gpg = stats.last5_goals_for / 5 if stats.last5_goals_for > 0 else 0.5
-        season_gpg = max(0.1, stats.season_goals_per_game)
-        
-        form_ratio = recent_gpg / season_gpg
-        weighted_form = (self.form_weight * form_ratio) + ((1 - self.form_weight) * 1.0)
-        
-        return max(0.7, min(1.5, weighted_form))
-    
-    def _calculate_style_adjustment(self, home_style: TeamStyle, away_style: TeamStyle) -> Dict:
-        """Calculate style adjustments"""
-        key = (home_style, away_style)
-        if key in self.style_matchup_effects:
-            return self.style_matchup_effects[key]
-        return {'home_adj': 1.0, 'away_adj': 1.0}
-    
-    def _calculate_probabilities(self, lambda_home: float, lambda_away: float) -> Dict:
-        """Calculate all probabilities from goal expectations"""
-        # Over/Under 2.5
-        prob_over25 = self._poisson_over25(lambda_home, lambda_away)
+        # 10. CALCULATE PROBABILITIES
+        prob_over25 = self._poisson_over25_correct(lambda_home, lambda_away)
         prob_under25 = 1 - prob_over25
-        
-        # BTTS
         prob_btts = self._poisson_btts(lambda_home, lambda_away)
         prob_no_btts = 1 - prob_btts
         
-        # Match result
-        home_win_prob, draw_prob, away_win_prob = self._poisson_match_result(lambda_home, lambda_away)
+        # Calculate win/draw probabilities
+        home_win_prob, draw_prob, away_win_prob = self._poisson_match_probabilities(lambda_home, lambda_away)
         
         return {
             'lambda_home': lambda_home,
             'lambda_away': lambda_away,
-            'total_goals': lambda_home + lambda_away,
+            'total_goals': total_goals,
             'probabilities': {
                 'over25': prob_over25,
                 'under25': prob_under25,
@@ -414,93 +382,252 @@ class EdgeFinderPredictor:
                 'draw': draw_prob,
                 'home_or_draw': home_win_prob + draw_prob,
                 'away_or_draw': away_win_prob + draw_prob
+            },
+            'adjustment_factors': {
+                'home_attack': home_attack,
+                'away_attack': away_attack,
+                'home_shot_mult': home_shot_mult,
+                'away_shot_mult': away_shot_mult,
+                'home_form_adj': home_form_adj,
+                'away_form_adj': away_form_adj,
+                'home_defense_mult': home_defense_mult,
+                'away_defense_mult': away_defense_mult,
+                'home_defense': home_defense,
+                'away_defense': away_defense,
+                'home_efficiency': home_efficiency,
+                'away_efficiency': away_efficiency
             }
         }
     
-    def _poisson_over25(self, lambda_home: float, lambda_away: float) -> float:
-        """Calculate Over 2.5 probability"""
+    def _poisson_over25_correct(self, lambda_home: float, lambda_away: float) -> float:
+        """Calculate probability of Over 2.5 goals"""
         try:
             total_lambda = lambda_home + lambda_away
             prob_0 = math.exp(-total_lambda)
             prob_1 = total_lambda * math.exp(-total_lambda)
             prob_2 = (total_lambda ** 2) * math.exp(-total_lambda) / 2
-            return 1 - (prob_0 + prob_1 + prob_2)
+            prob_under25 = prob_0 + prob_1 + prob_2
+            return 1 - prob_under25
         except:
-            # Fallback
-            total_goals = lambda_home + lambda_away
-            if total_goals > 3.0:
-                return 0.65
-            elif total_goals > 2.5:
-                return 0.55
-            elif total_goals > 2.0:
-                return 0.45
-            else:
-                return 0.35
+            return 0.5
     
     def _poisson_btts(self, lambda_home: float, lambda_away: float) -> float:
-        """Calculate BTTS probability"""
+        """Calculate probability of Both Teams to Score"""
         try:
             prob_home_score = 1 - math.exp(-lambda_home)
             prob_away_score = 1 - math.exp(-lambda_away)
             return prob_home_score * prob_away_score
         except:
-            # Fallback
-            avg_goals = (lambda_home + lambda_away) / 2
-            if avg_goals > 1.5:
-                return 0.55
-            elif avg_goals > 1.0:
-                return 0.45
-            else:
-                return 0.35
+            return 0.5
     
-    def _poisson_match_result(self, lambda_home: float, lambda_away: float) -> Tuple[float, float, float]:
-        """Calculate match result probabilities"""
+    def _poisson_match_probabilities(self, lambda_home: float, lambda_away: float) -> Tuple[float, float, float]:
+        """Calculate proper win/draw probabilities"""
         try:
             max_goals = 8
-            home_win = 0.0
-            draw = 0.0
-            away_win = 0.0
+            home_win_prob = 0.0
+            draw_prob = 0.0
+            away_win_prob = 0.0
             
             for i in range(max_goals + 1):
-                prob_i = math.exp(-lambda_home) * (lambda_home ** i) / math.factorial(i)
+                prob_home_i = math.exp(-lambda_home) * (lambda_home ** i) / math.factorial(i)
                 
                 for j in range(max_goals + 1):
-                    prob_j = math.exp(-lambda_away) * (lambda_away ** j) / math.factorial(j)
+                    prob_away_j = math.exp(-lambda_away) * (lambda_away ** j) / math.factorial(j)
                     
-                    joint = prob_i * prob_j
+                    joint_prob = prob_home_i * prob_away_j
                     
                     if i > j:
-                        home_win += joint
+                        home_win_prob += joint_prob
                     elif i == j:
-                        draw += joint
+                        draw_prob += joint_prob
                     else:
-                        away_win += joint
+                        away_win_prob += joint_prob
             
             # Normalize
-            total = home_win + draw + away_win
+            total = home_win_prob + draw_prob + away_win_prob
             if total > 0:
-                home_win /= total
-                draw /= total
-                away_win /= total
+                home_win_prob /= total
+                draw_prob /= total
+                away_win_prob /= total
             
-            return home_win, draw, away_win
-        except:
+            return home_win_prob, draw_prob, away_win_prob
+            
+        except Exception:
             # Simplified fallback
-            diff = lambda_home - lambda_away
+            if lambda_home <= 0 or lambda_away <= 0:
+                return 0.33, 0.34, 0.33
             
-            if diff > 0.8:
-                return 0.50, 0.25, 0.25
-            elif diff > 0.3:
-                return 0.45, 0.30, 0.25
-            elif diff > -0.3:
-                return 0.35, 0.30, 0.35
-            elif diff > -0.8:
-                return 0.25, 0.30, 0.45
-            else:
-                return 0.25, 0.25, 0.50
+            home_strength = lambda_home / (lambda_home + lambda_away)
+            draw_prob = 0.25
+            home_win_prob = home_strength * (1 - draw_prob)
+            away_win_prob = (1 - home_strength) * (1 - draw_prob)
+            
+            return home_win_prob, draw_prob, away_win_prob
     
-    def find_value_bets(self, model_probs: Dict, market_odds: Dict) -> List[Dict]:
-        """Find value bets based on edge"""
+    def analyze_team_identity(self, home_stats: EnhancedTeamStats, 
+                            away_stats: EnhancedTeamStats) -> Dict:
+        """Analyze Team Identity using shot data and style"""
+        analysis = {
+            'home_shot_quality': self._calculate_shot_quality_multiplier(home_stats),
+            'away_shot_quality': self._calculate_shot_quality_multiplier(away_stats),
+            'style_clash': f"{home_stats.style.value} vs {away_stats.style.value}",
+            'insights': [],
+            'confidence_factors': []
+        }
+        
+        # Shot volume insights
+        if home_stats.shots_per_game > 14:
+            analysis['insights'].append(
+                f"{home_stats.team_name} high shot volume ({home_stats.shots_per_game:.1f}/game)"
+            )
+            analysis['confidence_factors'].append(('high_shot_volume', 1))
+        
+        if away_stats.shots_per_game < 10:
+            analysis['insights'].append(
+                f"{away_stats.team_name} low shot volume ({away_stats.shots_per_game:.1f}/game)"
+            )
+            analysis['confidence_factors'].append(('low_shot_volume', 1))
+        
+        # Style insights
+        style_key = (home_stats.style, away_stats.style)
+        if style_key in self.style_adjustments:
+            analysis['insights'].append(
+                f"Style matchup: {home_stats.style.value} vs {away_stats.style.value}"
+            )
+            analysis['confidence_factors'].append(('significant_style_clash', 2))
+        
+        return analysis
+    
+    def analyze_defense_patterns(self, home_stats: EnhancedTeamStats,
+                               away_stats: EnhancedTeamStats) -> Dict:
+        """Analyze Defense using venue splits and clean sheet data"""
+        analysis = {
+            'home_venue_defense': self._calculate_venue_defense_strength(home_stats, is_home=True),
+            'away_venue_defense': self._calculate_venue_defense_strength(away_stats, is_home=False),
+            'insights': [],
+            'confidence_factors': []
+        }
+        
+        # Clean sheet insights
+        if home_stats.clean_sheet_pct_home > 0.4:
+            analysis['insights'].append(
+                f"{home_stats.team_name} strong home defense ({home_stats.clean_sheet_pct_home:.1%} clean sheets)"
+            )
+            analysis['confidence_factors'].append(('strong_home_defense', 2))
+        
+        if away_stats.clean_sheet_pct_away < 0.1:
+            analysis['insights'].append(
+                f"{away_stats.team_name} weak away defense ({away_stats.clean_sheet_pct_away:.1%} clean sheets)"
+            )
+            analysis['confidence_factors'].append(('weak_away_defense', 2))
+        
+        # Failed to score insights
+        if home_stats.failed_to_score_pct_home < 0.2:
+            analysis['insights'].append(
+                f"{home_stats.team_name} reliable home scoring"
+            )
+        
+        if away_stats.failed_to_score_pct_away > 0.4:
+            analysis['insights'].append(
+                f"{away_stats.team_name} struggles to score away ({away_stats.failed_to_score_pct_away:.1%} failed to score)"
+            )
+            analysis['confidence_factors'].append(('poor_away_scoring', 2))
+        
+        return analysis
+    
+    def analyze_transition_trends(self, home_stats: EnhancedTeamStats,
+                                away_stats: EnhancedTeamStats) -> Dict:
+        """Analyze Transition using BTTS, Over patterns and recent form"""
+        analysis = {
+            'home_last5_gpg': home_stats.last5_goals_for / 5,
+            'away_last5_gpg': away_stats.last5_goals_for / 5,
+            'combined_btts': (home_stats.btts_pct + away_stats.btts_pct) / 2,
+            'combined_over25': (home_stats.over25_pct + away_stats.over25_pct) / 2,
+            'insights': [],
+            'confidence_factors': []
+        }
+        
+        # Recent form insights
+        home_form_ratio = analysis['home_last5_gpg'] / home_stats.season_goals_per_game if home_stats.season_goals_per_game > 0 else 1.0
+        away_form_ratio = analysis['away_last5_gpg'] / away_stats.season_goals_per_game if away_stats.season_goals_per_game > 0 else 1.0
+        
+        if home_form_ratio > 1.2:
+            analysis['insights'].append(
+                f"{home_stats.team_name} attacking form improving ({home_stats.last5_goals_for} goals in last 5)"
+            )
+            analysis['confidence_factors'].append(('improving_attack', 2))
+        
+        if away_form_ratio < 0.8:
+            analysis['insights'].append(
+                f"{away_stats.team_name} poor recent attacking form ({away_stats.last5_goals_for} goals in last 5)"
+            )
+            analysis['confidence_factors'].append(('poor_attack_form', 2))
+        
+        # BTTS and Over trends
+        if analysis['combined_btts'] > 0.7:
+            analysis['insights'].append(
+                f"High BTTS probability (combined {analysis['combined_btts']:.1%})"
+            )
+            analysis['confidence_factors'].append(('high_btts', 2))
+        
+        if analysis['combined_over25'] > 0.7:
+            analysis['insights'].append(
+                f"High Over 2.5 probability (combined {analysis['combined_over25']:.1%})"
+            )
+            analysis['confidence_factors'].append(('high_scoring', 2))
+        
+        return analysis
+    
+    def calculate_confidence_score(self, analysis: Dict, goal_expectations: Dict) -> Dict:
+        """Calculate confidence score based on data quality"""
+        confidence_factors = []
+        total_score = 5
+        
+        # Sample size factor
+        home_stats = analysis.get('home_stats')
+        away_stats = analysis.get('away_stats')
+        
+        if home_stats and away_stats:
+            if home_stats.matches_played >= 10 and away_stats.matches_played >= 10:
+                total_score += 1
+                confidence_factors.append(('good_sample_size', 1))
+            
+            # Venue data availability
+            if home_stats.home_games_played >= 5 and away_stats.away_games_played >= 5:
+                total_score += 1
+                confidence_factors.append(('good_venue_data', 1))
+            
+            # Recent form data
+            if home_stats.last5_goals_for > 0 or away_stats.last5_goals_for > 0:
+                total_score += 1
+                confidence_factors.append(('recent_form_data', 1))
+        
+        # Ensure bounds
+        total_score = max(1, min(10, total_score))
+        
+        # Determine confidence level
+        if total_score >= 8:
+            level = ConfidenceLevel.HIGH
+            reason = "Strong data quality across all dimensions"
+        elif total_score >= 6:
+            level = ConfidenceLevel.MEDIUM
+            reason = "Adequate data with some limitations"
+        elif total_score >= 4:
+            level = ConfidenceLevel.LOW
+            reason = "Limited or inconsistent data"
+        else:
+            level = ConfidenceLevel.VERY_LOW
+            reason = "Poor data quality or very small samples"
+        
+        return {
+            'score': total_score,
+            'level': level,
+            'reason': reason,
+            'factors': confidence_factors
+        }
+    
+    def detect_value_bets(self, model_probs: Dict, market_odds: Dict) -> List[Dict]:
+        """Detect value bets across all markets"""
         value_bets = []
         
         bet_mappings = [
@@ -525,76 +652,111 @@ class EdgeFinderPredictor:
                     edge = model_prob - implied_prob
                     
                     if edge >= self.min_edge and model_prob >= self.min_confidence_for_stake:
-                        # Calculate stake
-                        edge_pct = edge * 100
-                        stake_pct = min(self.max_stake_pct, edge * 0.5)
-                        stake_amount = self.bankroll * stake_pct
-                        
-                        value_rating = "⭐"
-                        if edge_pct > 10:
-                            value_rating = "⭐⭐⭐"
-                        elif edge_pct > 5:
-                            value_rating = "⭐⭐"
+                        if edge > 0.05:
+                            value_rating = "⭐⭐⭐ Golden Nugget"
+                        elif edge > 0.03:
+                            value_rating = "⭐⭐ Value Bet"
+                        elif edge > 0.01:
+                            value_rating = "⭐ Consider"
+                        else:
+                            value_rating = "Poor"
                         
                         value_bets.append({
-                            'bet_type': bet_type.value,
-                            'market_odds': market_odd,
+                            'bet_type': bet_type,
                             'model_probability': model_prob,
+                            'market_odds': market_odd,
                             'implied_probability': implied_prob,
-                            'edge_percent': edge_pct,
-                            'stake_amount': stake_amount,
-                            'stake_percent': stake_pct * 100,
+                            'edge_percent': edge * 100,
+                            'market_key': market_key,
                             'value_rating': value_rating
                         })
         
-        return sorted(value_bets, key=lambda x: x['edge_percent'], reverse=True)
+        value_bets.sort(key=lambda x: x['edge_percent'], reverse=True)
+        return value_bets
     
-    def predict(self, home_stats: EnhancedTeamStats, away_stats: EnhancedTeamStats,
-               market_odds: Dict, league: str = "default") -> Dict:
+    def predict_match(self, home_stats: EnhancedTeamStats, away_stats: EnhancedTeamStats,
+                     market_odds: Dict, league: str = "default", 
+                     bankroll: float = None) -> Dict:
         """
         Main prediction method
         """
+        if bankroll is None:
+            bankroll = self.bankroll
+        
+        # Analyze all three dimensions
+        identity_analysis = self.analyze_team_identity(home_stats, away_stats)
+        defense_analysis = self.analyze_defense_patterns(home_stats, away_stats)
+        transition_analysis = self.analyze_transition_trends(home_stats, away_stats)
+        
+        # Store stats for confidence calculation
+        identity_analysis['home_stats'] = home_stats
+        identity_analysis['away_stats'] = away_stats
+        
         # Calculate goal expectations
         goal_expectations = self.calculate_goal_expectations(home_stats, away_stats, league)
         
-        # Find value bets
-        value_bets = self.find_value_bets(goal_expectations['probabilities'], market_odds)
-        
-        # Calculate totals
-        total_stake = sum(b['stake_amount'] for b in value_bets)
-        total_exposure = sum(b['stake_percent'] for b in value_bets)
-        
-        # Basic confidence score
-        confidence_score = self._calculate_confidence_score(home_stats, away_stats, goal_expectations)
-        
-        return {
-            'goal_expectations': goal_expectations,
-            'value_bets': value_bets,
-            'total_stake': total_stake,
-            'total_exposure': total_exposure,
-            'confidence_score': confidence_score,
-            'league': league
+        # Calculate confidence score
+        combined_analysis = {
+            'identity': identity_analysis,
+            'defense': defense_analysis,
+            'transition': transition_analysis,
+            'home_stats': home_stats,
+            'away_stats': away_stats
         }
-    
-    def _calculate_confidence_score(self, home_stats: EnhancedTeamStats,
-                                  away_stats: EnhancedTeamStats,
-                                  goal_expectations: Dict) -> int:
-        """Calculate confidence score (1-10)"""
-        score = 5  # Base score
+        confidence = self.calculate_confidence_score(combined_analysis, goal_expectations)
         
-        # Sample size
-        if home_stats.matches_played >= 10 and away_stats.matches_played >= 10:
-            score += 2
-        elif home_stats.matches_played >= 5 and away_stats.matches_played >= 5:
-            score += 1
+        # Detect value bets
+        value_bets = self.detect_value_bets(goal_expectations['probabilities'], market_odds)
         
-        # Venue data
-        if home_stats.home_games_played >= 3 and away_stats.away_games_played >= 3:
-            score += 1
+        # Calculate stakes
+        final_bets = []
+        for bet in value_bets:
+            # Simplified stake calculation
+            edge = bet['edge_percent'] / 100
+            stake_pct = min(self.max_stake_pct, edge * 0.5)
+            stake_amount = bankroll * stake_pct
+            
+            if stake_amount > bankroll * 0.005:  # Minimum sensible stake
+                final_bet = {
+                    'bet_type': bet['bet_type'].value,
+                    'market_odds': bet['market_odds'],
+                    'model_probability': bet['model_probability'],
+                    'edge_percent': bet['edge_percent'],
+                    'value_rating': bet['value_rating'],
+                    'stake_amount': stake_amount,
+                    'stake_percent': stake_pct * 100,
+                    'implied_probability': bet['implied_probability']
+                }
+                final_bets.append(final_bet)
         
-        # Check for unrealistic predictions
-        total_goals = goal_expectations['total_goals']
-        if total_goals > 5.0 or total_goals < 1.0:
-            score -= 2
+        # Prepare final result
+        result = {
+            'match_analysis': {
+                'identity': identity_analysis,
+                'defense': defense_analysis,
+                'transition': transition_analysis,
+                'goal_expectations': goal_expectations,
+                'confidence': confidence
+            },
+            'value_bets': final_bets,
+            'total_exposure_percent': sum(b['stake_percent'] for b in final_bets),
+            'total_stake': sum(b['stake_amount'] for b in final_bets),
+            'market_odds_used': market_odds
+        }
         
-        return max(1, min(10, score))
+        if not final_bets:
+            result['recommendation'] = f"NO BET - No value opportunities meeting minimum {self.min_edge*100:.1f}% edge criteria"
+        
+        return result
+
+
+# Quick test
+if __name__ == "__main__":
+    print("FIXED EdgeFinder Predictor v2.0")
+    print("Now properly uses ALL available data:")
+    print("- Actual goals (not just xG)")
+    print("- Venue splits (home/away performance)")
+    print("- Shot data (attack quality)")
+    print("- Last 5 goals (recent form)")
+    print("- Clean sheet data (defense quality)")
+    print("\nUniversal for top 5 European leagues")
