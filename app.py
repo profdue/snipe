@@ -469,7 +469,7 @@ class EdgeFinderFootballApp:
                 - Playing style classification
                 
                 2. **DEFENSE** (What they STOP) - **FIXED**  
-                - Defense quality = league_avg / team_defense
+                - Defense quality = team_defense / league_avg (FIXED: 0.57/2.6 = 0.22 for good defense)
                 - Attack multiplier = 1.0 / defense_quality (NOT direct multiplication!)
                 - Proper bounds: 0.4x to 1.8x realistic range
                 
@@ -514,6 +514,22 @@ class EdgeFinderFootballApp:
                 home_stats = self.create_team_stats(home_data)
                 away_stats = self.create_team_stats(away_data)
                 
+                # DEBUG: Check raw data from CSV
+                with st.expander("🐛 DEBUG: Raw CSV Data"):
+                    st.write(f"**Pisa data from CSV:**")
+                    st.write(f"home_wins: {home_data.get('home_wins', 'N/A')}")
+                    st.write(f"home_draws: {home_data.get('home_draws', 'N/A')}")
+                    st.write(f"home_losses: {home_data.get('home_losses', 'N/A')}")
+                    st.write(f"home_goals_for: {home_data.get('home_goals_for', 'N/A')}")
+                    st.write(f"home_goals_against: {home_data.get('home_goals_against', 'N/A')}")
+                    
+                    st.write(f"**Calculated:**")
+                    st.write(f"Pisa home_games_played = {home_stats.home_games_played}")
+                    st.write(f"Pisa home_goals_for = {home_stats.home_goals_for}")
+                    st.write(f"Pisa home_goals_against = {home_stats.home_goals_against}")
+                    st.write(f"Pisa home attack = {home_stats.home_goals_for / home_stats.home_games_played:.2f} goals/game")
+                    st.write(f"Pisa home defense = {home_stats.home_goals_against / home_stats.home_games_played:.2f} conceded/game")
+                
                 # Display team info
                 st.info(f"**Analyzing:** {home_team} vs {away_team} in {self.leagues[selected_league]['name']}")
                 
@@ -537,11 +553,11 @@ class EdgeFinderFootballApp:
             self.display_welcome_screen()
     
     def display_results(self, result, home_stats, away_stats, league_key):
-        """Display analysis results - UPDATED for fixed predictor"""
+        """Display analysis results - UPDATED with proper attack/defense labels"""
         
         # Match header
         st.markdown(f"""
-        <div style="text-align: center; padding: 2rem; background: linear-gradient(135deg, #2196F3 0%, #1976D2 100%); 
+        <div style="text-align: center; padding: 2rem; background: linear-gradient(135deg, #2196F3 0%, #1976D32 100%); 
                   border-radius: 15px; color: white; margin-bottom: 2rem;">
             <h2 style="margin: 0; font-size: 2rem;">{home_stats.team_name} 🆚 {away_stats.team_name}</h2>
             <p style="font-size: 1.2rem; opacity: 0.9;">Fixed Analysis Results - v2.1</p>
@@ -662,11 +678,15 @@ class EdgeFinderFootballApp:
         # Team analysis with enhanced stats
         st.markdown("### 🔍 Team Analysis")
         
+        # Get adjustment factors
+        adj_factors = result['match_analysis']['goal_expectations'].get('adjustment_factors', {})
+        
         col1, col2 = st.columns(2)
         
         with col1:
-            # Get adjustment factors
-            adj_factors = result['match_analysis']['goal_expectations'].get('adjustment_factors', {})
+            # CORRECTED: Calculate actual home attack from stats
+            home_attack_calculated = home_stats.home_goals_for / home_stats.home_games_played if home_stats.home_games_played > 0 else 0
+            home_defense_calculated = home_stats.home_goals_against / home_stats.home_games_played if home_stats.home_games_played > 0 else 0
             
             st.markdown(f"#### 🏠 {home_stats.team_name}")
             st.markdown(f"""
@@ -674,22 +694,32 @@ class EdgeFinderFootballApp:
                 <p><strong>Style:</strong> {self.get_team_style_icon(home_stats.style.value)} {home_stats.style.value}</p>
                 <p><strong>Shots/Game:</strong> {home_stats.shots_per_game:.1f} ({home_stats.shots_on_target_pg:.1f} on target)</p>
                 <p><strong>Conversion:</strong> {home_stats.conversion_rate:.1%} (Efficiency: {adj_factors.get('home_efficiency', 1.0):.2f}x)</p>
-                <p><strong>Home Attack:</strong> {adj_factors.get('home_attack', 0):.2f} goals/game</p>
-                <p><strong>Home Defense:</strong> {adj_factors.get('home_defense', 0):.2f} conceded/game</p>
+                <p><strong>Home Attack (calculated):</strong> {home_attack_calculated:.2f} goals/game</p>
+                <p><strong>Home Defense (calculated):</strong> {home_defense_calculated:.2f} conceded/game</p>
                 <p><strong>Home Clean Sheets:</strong> {home_stats.clean_sheet_pct_home:.1%}</p>
                 <p><strong>Recent Form:</strong> {home_stats.last5_form} ({home_stats.last5_goals_for} goals for, {home_stats.last5_goals_against} against)</p>
             </div>
             """, unsafe_allow_html=True)
+            
+            # DEBUG: Show what the predictor actually has
+            with st.expander("🔧 DEBUG: Predictor Values"):
+                st.write(f"home_attack from predictor: {adj_factors.get('home_attack', 'N/A')}")
+                st.write(f"home_defense from predictor: {adj_factors.get('home_defense', 'N/A')}")
+                st.write(f"home_attack_adjusted from predictor: {adj_factors.get('home_attack_adjusted', 'N/A')}")
         
         with col2:
+            # CORRECTED: Calculate actual away attack from stats
+            away_attack_calculated = away_stats.away_goals_for / away_stats.away_games_played if away_stats.away_games_played > 0 else 0
+            away_defense_calculated = away_stats.away_goals_against / away_stats.away_games_played if away_stats.away_games_played > 0 else 0
+            
             st.markdown(f"#### ✈️ {away_stats.team_name}")
             st.markdown(f"""
             <div class="team-stat-box">
                 <p><strong>Style:</strong> {self.get_team_style_icon(away_stats.style.value)} {away_stats.style.value}</p>
                 <p><strong>Shots/Game:</strong> {away_stats.shots_per_game:.1f} ({away_stats.shots_on_target_pg:.1f} on target)</p>
                 <p><strong>Conversion:</strong> {away_stats.conversion_rate:.1%} (Efficiency: {adj_factors.get('away_efficiency', 1.0):.2f}x)</p>
-                <p><strong>Away Attack:</strong> {adj_factors.get('away_attack', 0):.2f} goals/game</p>
-                <p><strong>Away Defense:</strong> {adj_factors.get('away_defense', 0):.2f} conceded/game</p>
+                <p><strong>Away Attack (calculated):</strong> {away_attack_calculated:.2f} goals/game</p>
+                <p><strong>Away Defense (calculated):</strong> {away_defense_calculated:.2f} conceded/game</p>
                 <p><strong>Away Clean Sheets:</strong> {away_stats.clean_sheet_pct_away:.1%}</p>
                 <p><strong>Recent Form:</strong> {away_stats.last5_form} ({away_stats.last5_goals_for} goals for, {away_stats.last5_goals_against} against)</p>
             </div>
@@ -760,56 +790,64 @@ class EdgeFinderFootballApp:
         col1, col2, col3 = st.columns(3)
         with col1:
             st.metric("Home Expected Goals", f"{goal_exp['lambda_home']:.2f}")
-            st.caption(f"Attack: {goal_exp['adjustment_factors'].get('home_attack', 0):.2f}/game")
+            # FIXED: Show actual calculation, not adjusted_factors value
+            home_base = adj_factors.get('home_attack', 0)
+            st.caption(f"From: {home_base:.2f} × adjustments")
         with col2:
             st.metric("Away Expected Goals", f"{goal_exp['lambda_away']:.2f}")
-            st.caption(f"Attack: {goal_exp['adjustment_factors'].get('away_attack', 0):.2f}/game")
+            away_base = adj_factors.get('away_attack', 0)
+            st.caption(f"From: {away_base:.2f} × adjustments")
         with col3:
             st.metric("Total Expected Goals", f"{goal_exp['total_goals']:.2f}")
             st.caption(f"League avg: {league_avg:.1f}/game")
         
-        # Show adjustment factors - FIXED LABELS
+        # Show adjustment factors - CORRECTED LABELS
         with st.expander("🔧 Goal Expectation Adjustments Applied"):
             adj_factors = goal_exp.get('adjustment_factors', {})
             if adj_factors:
                 col1, col2 = st.columns(2)
                 with col1:
                     st.write(f"**{home_stats.team_name} Adjustments:**")
-                    st.write(f"- Base Attack: {adj_factors.get('home_attack', 0):.2f} goals/game")
-                    st.write(f"- Shot Quality: {adj_factors.get('home_shot_mult', 1.0):.2f}x")
-                    st.write(f"- Form: {adj_factors.get('home_form_adj', 1.0):.2f}x")
+                    st.write(f"- Base Attack (home venue): {adj_factors.get('home_attack', 0):.2f} goals/game")
+                    st.write(f"- Shot Quality: {adj_factors.get('home_shot_quality', 1.0):.2f}x")
+                    st.write(f"- Form: {adj_factors.get('home_form', 1.0):.2f}x")
                     st.write(f"- Efficiency: {adj_factors.get('home_efficiency', 1.0):.2f}x")
-                    st.write(f"- Attack vs {away_stats.team_name} Defense: {adj_factors.get('away_defense_mult', 1.0):.2f}x")
-                    st.write(f"- Home Advantage: {adj_factors.get('home_advantage', 1.0):.2f}x")
+                    st.write(f"- Attack vs {away_stats.team_name} Defense: {adj_factors.get('attack_multiplier_home', 1.0):.2f}x")
+                    st.write(f"- Home Advantage: {adj_factors.get('home_venue', 1.0):.2f}x")
+                    st.write(f"- Style: {adj_factors.get('home_style_adj', 1.0):.2f}x")
+                    st.write(f"- **Final λ = {goal_exp['lambda_home']:.2f}**")
                 
                 with col2:
                     st.write(f"**{away_stats.team_name} Adjustments:**")
-                    st.write(f"- Base Attack: {adj_factors.get('away_attack', 0):.2f} goals/game")
-                    st.write(f"- Shot Quality: {adj_factors.get('away_shot_mult', 1.0):.2f}x")
-                    st.write(f"- Form: {adj_factors.get('away_form_adj', 1.0):.2f}x")
+                    st.write(f"- Base Attack (away venue): {adj_factors.get('away_attack', 0):.2f} goals/game")
+                    st.write(f"- Shot Quality: {adj_factors.get('away_shot_quality', 1.0):.2f}x")
+                    st.write(f"- Form: {adj_factors.get('away_form', 1.0):.2f}x")
                     st.write(f"- Efficiency: {adj_factors.get('away_efficiency', 1.0):.2f}x")
-                    st.write(f"- Attack vs {home_stats.team_name} Defense: {adj_factors.get('home_defense_mult', 1.0):.2f}x")
-                    st.write(f"- Away Penalty: {adj_factors.get('away_penalty', 1.0):.2f}x")
+                    st.write(f"- Attack vs {home_stats.team_name} Defense: {adj_factors.get('attack_multiplier_away', 1.0):.2f}x")
+                    st.write(f"- Away Penalty: {adj_factors.get('away_venue', 1.0):.2f}x")
+                    st.write(f"- Style: {adj_factors.get('away_style_adj', 1.0):.2f}x")
+                    st.write(f"- **Final λ = {goal_exp['lambda_away']:.2f}**")
                 
-                # Add defense quality summary
+                # Add defense quality summary - CORRECTED CALCULATION
                 st.markdown("---")
-                st.write("**Defense Quality Summary:**")
+                st.write("**Defense Quality Summary (CORRECTED):**")
                 col1, col2 = st.columns(2)
                 with col1:
                     home_def = adj_factors.get('home_defense', league_avg)
-                    home_def_quality = league_avg / home_def if home_def > 0 else 1.0
+                    # CORRECT: defense_quality = team_defense / league_avg
+                    home_def_quality = home_def / league_avg if league_avg > 0 else 1.0
                     st.write(f"{home_stats.team_name} home defense:")
                     st.write(f"- Goals conceded: {home_def:.2f}/game")
                     st.write(f"- Quality vs avg: {home_def_quality:.2f}x")
-                    st.write(f"- Effect on opponent: {1.0/home_def_quality:.2f}x scoring")
+                    st.write(f"- Effect on opponent: {1.0/home_def_quality:.2f}x scoring" if home_def_quality > 0 else "- Cannot calculate")
                 
                 with col2:
                     away_def = adj_factors.get('away_defense', league_avg)
-                    away_def_quality = league_avg / away_def if away_def > 0 else 1.0
+                    away_def_quality = away_def / league_avg if league_avg > 0 else 1.0
                     st.write(f"{away_stats.team_name} away defense:")
                     st.write(f"- Goals conceded: {away_def:.2f}/game")
                     st.write(f"- Quality vs avg: {away_def_quality:.2f}x")
-                    st.write(f"- Effect on opponent: {1.0/away_def_quality:.2f}x scoring")
+                    st.write(f"- Effect on opponent: {1.0/away_def_quality:.2f}x scoring" if away_def_quality > 0 else "- Cannot calculate")
             else:
                 st.write("No detailed adjustment factors available.")
         
@@ -914,7 +952,7 @@ class EdgeFinderFootballApp:
             st.markdown("""
             ### 🛡️ 2. Defense - **FIXED**
             **What they STOP**
-            - Defense quality = league_avg / goals_conceded
+            - Defense quality = team_defense / league_avg ✓ (FIXED!)
             - Attack multiplier = 1.0 / defense_quality ✓
             - Realistic bounds: 0.4x to 1.8x
             - Venue-specific performance
@@ -964,7 +1002,7 @@ class EdgeFinderFootballApp:
         
         **CORRECTED Prediction Logic:**
         ```
-        Defense_Quality = League_Avg_Goals / Team_Defense
+        Defense_Quality = Team_Defense / League_Avg_Goals  # FIXED: 0.57/2.6 = 0.22
         Attack_Multiplier = 1.0 / Defense_Quality  # FIXED!
         
         Expected_Goals = Base_Attack × Shot_Quality × Form × Attack_Multiplier × Efficiency × Venue
