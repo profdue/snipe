@@ -1,6 +1,6 @@
 """
-EdgeFinder Predictor - FIXED Version
-Maintains all original design while fixing mathematical bugs
+EdgeFinder Predictor - FINAL FIXED VERSION
+Realistic predictions with proper mathematical logic
 """
 
 import numpy as np
@@ -239,7 +239,7 @@ class EdgeFinderPredictor:
         self.min_confidence_for_stake = 0.55
     
     def _get_venue_attack_strength(self, stats: EnhancedTeamStats, is_home: bool) -> float:
-        """Get venue-specific attack strength with REALISTIC bounds"""
+        """Get venue-specific attack strength with REALISTIC minimums"""
         if is_home:
             games = stats.home_games_played
             goals = stats.home_goals_for
@@ -252,12 +252,12 @@ class EdgeFinderPredictor:
         else:
             gpg = stats.season_goals_per_game
         
-        # REALISTIC BOUNDS: No team averages >3.0 goals per game
-        # Minimum 0.3 goals per game
-        return max(0.3, min(3.0, gpg))
+        # REALISTIC MINIMUMS: Even bad teams score SOME goals
+        # Minimum 0.7 goals per game for attack
+        return max(0.7, min(3.0, gpg))
     
     def _get_venue_defense_strength(self, stats: EnhancedTeamStats, is_home: bool) -> float:
-        """Get venue-specific defense strength with REALISTIC bounds"""
+        """Get venue-specific defense strength with REALISTIC minimums"""
         if is_home:
             games = stats.home_games_played
             conceded = stats.home_goals_against
@@ -270,8 +270,9 @@ class EdgeFinderPredictor:
         else:
             gapg = stats.season_goals_conceded_per_game
         
-        # REALISTIC BOUNDS: No team concedes >3.0 goals per game on average
-        return max(0.3, min(3.0, gapg))
+        # REALISTIC MINIMUMS: Even good defenses concede SOME goals
+        # Minimum 0.8 goals per game conceded for defense
+        return max(0.8, min(3.0, gapg))
     
     def _calculate_attack_vs_defense_adjustment(self, attack_strength: float,
                                               opponent_defense: float,
@@ -279,13 +280,10 @@ class EdgeFinderPredictor:
         """
         FIXED: Realistic attack vs defense adjustment
         
-        LOGIC:
-        - If opponent defense = league average → no adjustment (multiplier = 1.0)
-        - If opponent defense is GOOD (concedes less than average) → attack reduced
-        - If opponent defense is BAD (concedes more than average) → attack increased
-        
-        Formula: attack_multiplier = (2 - (opponent_defense / league_avg)) / 1.5
-        This gives multipliers between ~0.67 and ~1.33
+        CORRECTED FORMULA: attack_multiplier = sqrt(defense_quality)
+        - Good defense (0.5x league avg) → sqrt(0.5) = 0.71 (attack reduced by 29%)
+        - Average defense (1.0x) → sqrt(1.0) = 1.0 (no change)
+        - Bad defense (1.5x) → sqrt(1.5) = 1.22 (attack increased by 22%)
         """
         if opponent_defense <= 0.1 or league_avg_gpg <= 0.1:
             return attack_strength
@@ -293,24 +291,11 @@ class EdgeFinderPredictor:
         # Calculate defense quality
         defense_quality = opponent_defense / league_avg_gpg
         
-        # FIXED FORMULA: attack_multiplier = (2 - defense_quality) / 1.5
-        # defense_quality = 0.5 (good defense) → (2 - 0.5)/1.5 = 1.0
-        # defense_quality = 1.0 (average defense) → (2 - 1.0)/1.5 = 0.67
-        # defense_quality = 1.5 (bad defense) → (2 - 1.5)/1.5 = 0.33
+        # CORRECTED: Use square root for less aggressive effect
+        attack_multiplier = math.sqrt(defense_quality) if defense_quality > 0 else 1.0
         
-        # Wait, that's backwards! Let me think...
-        # Actually, if defense_quality = 0.5 (GOOD defense), attack should be REDUCED
-        # So attack_multiplier should be < 1.0 for good defenses
-        
-        # CORRECT FORMULA: attack_multiplier = defense_quality
-        # Good defense (0.5x league avg) → multiplier = 0.5 (attack halved)
-        # Average defense (1.0x) → multiplier = 1.0 (no change)
-        # Bad defense (1.5x) → multiplier = 1.5 (attack increased by 50%)
-        
-        attack_multiplier = defense_quality
-        
-        # Apply REALISTIC bounds: attack can be 0.5x to 1.5x
-        attack_multiplier = max(0.5, min(1.5, attack_multiplier))
+        # Apply REALISTIC bounds
+        attack_multiplier = max(0.6, min(1.4, attack_multiplier))
         
         return attack_strength * attack_multiplier
     
@@ -321,38 +306,38 @@ class EdgeFinderPredictor:
         
         efficiency = conversion_rate / league_avg_conversion
         
-        # REALISTIC bounds: efficiency between 0.5x and 1.5x
-        return max(0.5, min(1.5, efficiency))
+        # REALISTIC bounds: efficiency between 0.7x and 1.3x
+        return max(0.7, min(1.3, efficiency))
     
     def _calculate_shot_quality_adjustment(self, stats: EnhancedTeamStats, league_avg_shots: float) -> float:
-        """Calculate shot quality from volume and accuracy"""
+        """Calculate shot quality from volume and accuracy - LESS CONSERVATIVE"""
         if league_avg_shots <= 0:
             return 1.0
         
         # Volume component
         volume_ratio = stats.shots_per_game / league_avg_shots
         
-        # Accuracy component (if we have shots on target data)
+        # Accuracy component
         if stats.shots_per_game > 0:
             accuracy = stats.shots_on_target_pg / stats.shots_per_game
-            # Assume league average accuracy is ~35%
+            # League average accuracy is ~35%
             accuracy_ratio = accuracy / 0.35 if 0.35 > 0 else 1.0
         else:
             accuracy_ratio = 1.0
         
-        # Combined shot quality
-        shot_quality = (volume_ratio * 0.7) + (accuracy_ratio * 0.3)
+        # Combined shot quality - give more weight to accuracy
+        shot_quality = (volume_ratio * 0.4) + (accuracy_ratio * 0.6)
         
-        # REALISTIC bounds
-        return max(0.7, min(1.3, shot_quality))
+        # LESS conservative bounds
+        return max(0.8, min(1.3, shot_quality))
     
     def _calculate_form_adjustment(self, stats: EnhancedTeamStats) -> float:
-        """Calculate form adjustment with REALISTIC bounds"""
+        """Calculate form adjustment - LESS EXTREME"""
         # Calculate recent goals per game
         last5_gpg = stats.last5_goals_for / 5 if stats.last5_goals_for > 0 else 0.5
         
         # Get season average
-        season_gpg = max(0.3, stats.season_goals_per_game)
+        season_gpg = max(0.5, stats.season_goals_per_game)
         
         # Calculate form ratio
         form_ratio = last5_gpg / season_gpg if season_gpg > 0 else 1.0
@@ -360,7 +345,7 @@ class EdgeFinderPredictor:
         # Apply form weight: blend recent form with season baseline
         weighted_form = (self.form_weight * form_ratio) + ((1 - self.form_weight) * 1.0)
         
-        # REALISTIC bounds: form can't double or halve team strength
+        # LESS extreme bounds
         return max(0.7, min(1.3, weighted_form))
     
     def calculate_goal_expectations(self, home_stats: EnhancedTeamStats,
@@ -371,14 +356,14 @@ class EdgeFinderPredictor:
         """
         context = self.league_contexts.get(league, self.league_contexts['default'])
         
-        # 1. VENUE-SPECIFIC BASE STRENGTHS
+        # 1. VENUE-SPECIFIC BASE STRENGTHS (with realistic minimums)
         home_attack_base = self._get_venue_attack_strength(home_stats, is_home=True)
         away_attack_base = self._get_venue_attack_strength(away_stats, is_home=False)
         
         home_defense_base = self._get_venue_defense_strength(home_stats, is_home=True)
         away_defense_base = self._get_venue_defense_strength(away_stats, is_home=False)
         
-        # 2. ATTACK VS DEFENSE ADJUSTMENTS (FIXED!)
+        # 2. ATTACK VS DEFENSE ADJUSTMENTS (FIXED with square root!)
         home_attack_adjusted = self._calculate_attack_vs_defense_adjustment(
             home_attack_base, away_defense_base, context['avg_gpg']
         )
@@ -395,7 +380,7 @@ class EdgeFinderPredictor:
             away_stats.conversion_rate, context['avg_conversion']
         )
         
-        # 4. SHOT QUALITY ADJUSTMENTS
+        # 4. SHOT QUALITY ADJUSTMENTS (less conservative)
         home_shot_quality = self._calculate_shot_quality_adjustment(
             home_stats, context['avg_shots']
         )
@@ -403,7 +388,7 @@ class EdgeFinderPredictor:
             away_stats, context['avg_shots']
         )
         
-        # 5. FORM ADJUSTMENTS
+        # 5. FORM ADJUSTMENTS (less extreme)
         home_form = self._calculate_form_adjustment(home_stats)
         away_form = self._calculate_form_adjustment(away_stats)
         
@@ -439,7 +424,7 @@ class EdgeFinderPredictor:
         home_venue = context['home_advantage']
         away_venue = context['away_penalty']
         
-        # 8. FINAL GOAL EXPECTATIONS (with ALL adjustments)
+        # 8. FINAL GOAL EXPECTATIONS
         lambda_home = (home_attack_adjusted *
                       home_efficiency *
                       home_shot_quality *
@@ -454,18 +439,25 @@ class EdgeFinderPredictor:
                       away_style_adj *
                       away_venue)
         
-        # 9. CRITICAL REALITY CHECKS
-        # NO team expects >2.5 goals per game in reality
-        lambda_home = max(0.2, min(2.5, lambda_home))
-        lambda_away = max(0.2, min(2.5, lambda_away))
+        # 9. REALITY CHECKS AND BOUNDS
+        # Professional teams expect 0.8-2.2 goals per game
+        lambda_home = max(0.8, min(2.2, lambda_home))
+        lambda_away = max(0.8, min(2.2, lambda_away))
         
-        # If total goals > 5.0, scale down (extremely rare in reality)
         total_goals = lambda_home + lambda_away
-        if total_goals > 5.0:
-            scale_factor = 4.5 / total_goals
-            lambda_home *= scale_factor
-            lambda_away *= scale_factor
+        
+        # If still too low, add league context minimum
+        league_min = context['avg_gpg'] * 0.7  # 70% of league average as minimum
+        if total_goals < league_min:
+            boost = (league_min - total_goals) / 2
+            lambda_home += boost
+            lambda_away += boost
             total_goals = lambda_home + lambda_away
+        
+        # Final bounds check
+        lambda_home = max(0.8, min(2.5, lambda_home))
+        lambda_away = max(0.8, min(2.5, lambda_away))
+        total_goals = lambda_home + lambda_away
         
         # 10. CALCULATE PROBABILITIES
         prob_over25 = self._poisson_over25_correct(lambda_home, lambda_away)
@@ -512,13 +504,14 @@ class EdgeFinderPredictor:
         }
     
     def _poisson_over25_correct(self, lambda_home: float, lambda_away: float) -> float:
-        """Calculate probability of Over 2.5 goals with SANITY CHECKS"""
+        """Calculate probability of Over 2.5 goals with REALISTIC bounds"""
         try:
             total_lambda = lambda_home + lambda_away
             
-            # If total goals is very low, Over 2.5 is unlikely
-            if total_lambda < 1.5:
-                return max(0.05, total_lambda / 5.0)
+            # If total goals suggests Over 2.5 is unlikely
+            if total_lambda < 2.0:
+                # Realistic minimum probability
+                return max(0.15, min(0.85, total_lambda / 4.0))
             
             prob_0 = math.exp(-total_lambda)
             prob_1 = total_lambda * math.exp(-total_lambda)
@@ -527,8 +520,8 @@ class EdgeFinderPredictor:
             
             result = 1 - prob_under25
             
-            # SANITY: Never give >95% or <5% probability
-            return max(0.05, min(0.95, result))
+            # REALISTIC bounds
+            return max(0.15, min(0.85, result))
             
         except:
             # Fallback based on total goals
@@ -553,8 +546,8 @@ class EdgeFinderPredictor:
             prob_away_score = 1 - math.exp(-lambda_away)
             result = prob_home_score * prob_away_score
             
-            # SANITY: Never give >90% or <10% probability
-            return max(0.10, min(0.90, result))
+            # REALISTIC bounds
+            return max(0.20, min(0.80, result))
             
         except:
             # Fallback
@@ -716,8 +709,8 @@ class EdgeFinderPredictor:
         }
         
         # Recent form insights
-        home_season_gpg = max(0.3, home_stats.season_goals_per_game)
-        away_season_gpg = max(0.3, away_stats.season_goals_per_game)
+        home_season_gpg = max(0.5, home_stats.season_goals_per_game)
+        away_season_gpg = max(0.5, away_stats.season_goals_per_game)
         
         home_form_ratio = analysis['home_last5_gpg'] / home_season_gpg
         away_form_ratio = analysis['away_last5_gpg'] / away_season_gpg
@@ -791,16 +784,17 @@ class EdgeFinderPredictor:
         lambda_home = goal_expectations.get('lambda_home', 0)
         lambda_away = goal_expectations.get('lambda_away', 0)
         
-        if total_goals > 5.0:
-            total_score -= 3
-            confidence_factors.append(('extreme_total_goals', -3))
-        elif total_goals > 4.0:
-            total_score -= 2
-            confidence_factors.append(('high_total_goals', -2))
+        # Now reward realistic predictions, not punish them
+        if 2.0 <= total_goals <= 3.5:
+            total_score += 1
+            confidence_factors.append(('realistic_total_goals', 1))
+        elif total_goals < 1.5 or total_goals > 4.5:
+            total_score -= 1
+            confidence_factors.append(('unusual_total_goals', -1))
         
-        if lambda_home > 3.0 or lambda_away > 3.0:
-            total_score -= 2
-            confidence_factors.append(('extreme_team_goals', -2))
+        if 0.8 <= lambda_home <= 2.2 and 0.8 <= lambda_away <= 2.2:
+            total_score += 1
+            confidence_factors.append(('realistic_team_goals', 1))
         
         # Ensure bounds
         total_score = max(1, min(10, total_score))
@@ -855,6 +849,10 @@ class EdgeFinderPredictor:
                     if edge > 0.25:
                         continue
                     
+                    # SANITY CHECK: Model probability must be reasonable
+                    if model_prob < 0.05 or model_prob > 0.95:
+                        continue
+                    
                     if edge >= self.min_edge and model_prob >= self.min_confidence_for_stake:
                         if edge > 0.15:
                             value_rating = "🔥 EXTREME VALUE"
@@ -884,7 +882,7 @@ class EdgeFinderPredictor:
                      market_odds: Dict, league: str = "default", 
                      bankroll: float = None) -> Dict:
         """
-        Main prediction method - FIXED with realistic outputs
+        Main prediction method - FINAL FIXED VERSION
         """
         if bankroll is None:
             bankroll = self.bankroll
@@ -921,7 +919,7 @@ class EdgeFinderPredictor:
             
             # Conservative stake calculation
             if edge > 0.20:
-                stake_pct = min(self.max_stake_pct * 0.5, edge * 0.15)  # Be extra conservative
+                stake_pct = min(self.max_stake_pct * 0.5, edge * 0.15)
             elif edge > 0.10:
                 stake_pct = min(self.max_stake_pct, edge * 0.20)
             elif edge > 0.05:
@@ -966,80 +964,80 @@ class EdgeFinderPredictor:
         return result
 
 
-# Test function to verify realistic outputs
-def test_realistic_predictions():
-    """Test with sample data to verify realistic outputs"""
-    print("🧪 TESTING FIXED PREDICTOR...")
+# Test function
+def test_final_fixed_predictor():
+    """Test the FINAL fixed predictor"""
+    print("🧪 TESTING FINAL FIXED PREDICTOR...")
     
-    # Sample stats (simplified)
+    # Sample stats
     home_stats = EnhancedTeamStats(
-        team_name="Arsenal",
+        team_name="Pisa",
         matches_played=14,
-        possession_avg=59,
-        shots_per_game=14.43,
-        shots_on_target_pg=6.14,
-        conversion_rate=0.13,
-        xg_for_avg=1.71,
-        xg_against_avg=0.83,
-        home_wins=6, home_draws=1, home_losses=0,
-        away_wins=4, away_draws=2, away_losses=1,
-        home_goals_for=18, home_goals_against=2,
-        away_goals_for=9, away_goals_against=5,
-        clean_sheet_pct=0.57,
-        clean_sheet_pct_home=0.71,
-        clean_sheet_pct_away=0.43,
-        failed_to_score_pct=0.07,
-        failed_to_score_pct_home=0.0,
-        failed_to_score_pct_away=0.14,
-        btts_pct=0.36,
-        btts_pct_home=0.29,
-        btts_pct_away=0.43,
-        over25_pct=0.43,
-        over25_pct_home=0.71,
-        over25_pct_away=0.14,
-        last5_form="LWDWD",
-        last5_wins=2, last5_draws=2, last5_losses=1,
-        last5_goals_for=10, last5_goals_against=6,
-        last5_ppg=1.6,
-        last5_cs_pct=0.20,
-        last5_fts_pct=0.0,
-        last5_btts_pct=0.80,
-        last5_over25_pct=0.60
-    )
-    
-    away_stats = EnhancedTeamStats(
-        team_name="Manchester City",
-        matches_played=14,
-        possession_avg=57,
-        shots_per_game=14.14,
-        shots_on_target_pg=6.21,
-        conversion_rate=0.16,
-        xg_for_avg=1.67,
-        xg_against_avg=1.14,
-        home_wins=6, home_draws=0, home_losses=1,
-        away_wins=3, away_draws=1, away_losses=3,
-        home_goals_for=19, home_goals_against=6,
-        away_goals_for=13, away_goals_against=10,
+        possession_avg=48,
+        shots_per_game=9.8,
+        shots_on_target_pg=3.6,
+        conversion_rate=0.08,
+        xg_for_avg=1.2,
+        xg_against_avg=1.3,
+        home_wins=4, home_draws=3, home_losses=0,
+        away_wins=2, away_draws=2, away_losses=3,
+        home_goals_for=4, home_goals_against=4,
+        away_goals_for=7, away_goals_against=9,
         clean_sheet_pct=0.36,
-        clean_sheet_pct_home=0.43,
-        clean_sheet_pct_away=0.29,
-        failed_to_score_pct=0.14,
+        clean_sheet_pct_home=0.57,
+        clean_sheet_pct_away=0.14,
+        failed_to_score_pct=0.21,
         failed_to_score_pct_home=0.14,
-        failed_to_score_pct_away=0.14,
+        failed_to_score_pct_away=0.29,
         btts_pct=0.50,
         btts_pct_home=0.43,
         btts_pct_away=0.57,
-        over25_pct=0.79,
-        over25_pct_home=0.86,
-        over25_pct_away=0.71,
-        last5_form="WWWLW",
-        last5_wins=4, last5_draws=0, last5_losses=1,
-        last5_goals_for=15, last5_goals_against=8,
-        last5_ppg=2.4,
-        last5_cs_pct=0.40,
-        last5_fts_pct=0.0,
+        over25_pct=0.43,
+        over25_pct_home=0.43,
+        over25_pct_away=0.43,
+        last5_form="LDWDD",
+        last5_wins=1, last5_draws=3, last5_losses=1,
+        last5_goals_for=5, last5_goals_against=6,
+        last5_ppg=1.2,
+        last5_cs_pct=0.20,
+        last5_fts_pct=0.20,
         last5_btts_pct=0.60,
-        last5_over25_pct=1.00
+        last5_over25_pct=0.40
+    )
+    
+    away_stats = EnhancedTeamStats(
+        team_name="Parma",
+        matches_played=14,
+        possession_avg=48,
+        shots_per_game=10.9,
+        shots_on_target_pg=3.9,
+        conversion_rate=0.06,
+        xg_for_avg=1.3,
+        xg_against_avg=1.4,
+        home_wins=3, home_draws=2, home_losses=2,
+        away_wins=2, away_draws=2, away_losses=3,
+        home_goals_for=8, home_goals_against=8,
+        away_goals_for=7, away_goals_against=14,
+        clean_sheet_pct=0.21,
+        clean_sheet_pct_home=0.29,
+        clean_sheet_pct_away=0.14,
+        failed_to_score_pct=0.29,
+        failed_to_score_pct_home=0.14,
+        failed_to_score_pct_away=0.43,
+        btts_pct=0.57,
+        btts_pct_home=0.57,
+        btts_pct_away=0.57,
+        over25_pct=0.64,
+        over25_pct_home=0.71,
+        over25_pct_away=0.57,
+        last5_form="LWDLL",
+        last5_wins=1, last5_draws=1, last5_losses=3,
+        last5_goals_for=6, last5_goals_against=10,
+        last5_ppg=0.8,
+        last5_cs_pct=0.0,
+        last5_fts_pct=0.20,
+        last5_btts_pct=0.80,
+        last5_over25_pct=0.80
     )
     
     predictor = EdgeFinderPredictor(
@@ -1048,20 +1046,22 @@ def test_realistic_predictions():
         form_weight=0.4
     )
     
-    result = predictor.predict_match(home_stats, away_stats, {}, 'premier_league')
+    result = predictor.calculate_goal_expectations(home_stats, away_stats, 'serie_a')
     
-    print(f"\n✅ REALISTIC RESULTS:")
-    print(f"Home Expected Goals: {result['match_analysis']['goal_expectations']['lambda_home']:.2f}")
-    print(f"Away Expected Goals: {result['match_analysis']['goal_expectations']['lambda_away']:.2f}")
-    print(f"Total Expected Goals: {result['match_analysis']['goal_expectations']['total_goals']:.2f}")
+    print(f"\n✅ FINAL REALISTIC RESULTS:")
+    print(f"Home Expected Goals: {result['lambda_home']:.2f}")
+    print(f"Away Expected Goals: {result['lambda_away']:.2f}")
+    print(f"Total Expected Goals: {result['total_goals']:.2f}")
+    print(f"Over 2.5 Probability: {result['probabilities']['over25']:.1%}")
+    print(f"BTTS Probability: {result['probabilities']['btts_yes']:.1%}")
     
     # Verify realism
-    total_goals = result['match_analysis']['goal_expectations']['total_goals']
-    if 2.0 <= total_goals <= 4.0:
-        print(f"✅ REALITY CHECK PASSED: Total goals {total_goals:.2f} is realistic for Premier League")
+    total_goals = result['total_goals']
+    if 2.0 <= total_goals <= 3.5:
+        print(f"✅ PERFECT: Total goals {total_goals:.2f} is realistic for Serie A")
     else:
         print(f"⚠️  WARNING: Total goals {total_goals:.2f} outside typical range")
 
 
 if __name__ == "__main__":
-    test_realistic_predictions()
+    test_final_fixed_predictor()
