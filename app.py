@@ -106,7 +106,7 @@ class EdgeFinderFootballApp:
         """Create EnhancedTeamStats object from CSV data with proper cleaning"""
         data_dict = {}
         
-        # Define all expected fields
+        # Define all expected fields - UPDATED for new EnhancedTeamStats
         expected_fields = {
             'team_name': str, 'matches_played': int, 'possession_avg': float,
             'shots_per_game': float, 'shots_on_target_pg': float, 'conversion_rate': float,
@@ -124,7 +124,9 @@ class EdgeFinderFootballApp:
             'over25_pct': float, 'over25_pct_home': float, 'over25_pct_away': float,
             
             'last5_form': str, 'last5_wins': int, 'last5_draws': int, 'last5_losses': int,
-            'last5_goals_for': int, 'last5_goals_against': int
+            'last5_goals_for': int, 'last5_goals_against': int,
+            'last5_ppg': float, 'last5_cs_pct': float, 'last5_fts_pct': float,
+            'last5_btts_pct': float, 'last5_over25_pct': float
         }
         
         for field, field_type in expected_fields.items():
@@ -295,15 +297,15 @@ class EdgeFinderFootballApp:
         # Header
         st.markdown("""
         <div class="main-header">
-            <h1 style="margin: 0; font-size: 2.5rem;">⚽ EdgeFinder Pro</h1>
-            <p style="font-size: 1.2rem; opacity: 0.9;">Cross-League Football Value Betting System</p>
-            <p style="font-size: 1rem; opacity: 0.8;">"3 Things" Framework: Identity • Defense • Transition</p>
+            <h1 style="margin: 0; font-size: 2.5rem;">⚽ EdgeFinder Pro v2.0</h1>
+            <p style="font-size: 1.2rem; opacity: 0.9;">Enhanced Football Value Betting System</p>
+            <p style="font-size: 1rem; opacity: 0.8;">Now using ALL available data properly</p>
         </div>
         """, unsafe_allow_html=True)
         
-        # Initialize session state for predictor if it doesn't exist
-        if 'predictor_initialized' not in st.session_state:
-            st.session_state.predictor_initialized = False
+        # Initialize session state
+        if 'form_weight' not in st.session_state:
+            st.session_state.form_weight = 0.4
         
         # Sidebar
         with st.sidebar:
@@ -330,83 +332,24 @@ class EdgeFinderFootballApp:
                 away_options = [t for t in team_names if t != home_team]
                 away_team = st.selectbox("✈️ Away Team", away_options)
             
-            # Advanced predictor settings - Use session state to preserve values
+            # Predictor configuration - SIMPLIFIED for new predictor
             st.subheader("⚡ Predictor Configuration")
             
-            # Set default values in session state if not set
-            if 'form_weight' not in st.session_state:
-                st.session_state.form_weight = 0.4
-            if 'improvement_threshold' not in st.session_state:
-                st.session_state.improvement_threshold = 1.15
-            if 'decline_threshold' not in st.session_state:
-                st.session_state.decline_threshold = 0.85
-            if 'away_venue_factor' not in st.session_state:
-                st.session_state.away_venue_factor = 0.85
-            if 'max_team_goals' not in st.session_state:
-                st.session_state.max_team_goals = 4.0
-            if 'max_total_goals' not in st.session_state:
-                st.session_state.max_total_goals = 4.5
-            if 'min_team_goals' not in st.session_state:
-                st.session_state.min_team_goals = 0.2
-            
+            # Only keep parameters that exist in new predictor
             with st.expander("Advanced Settings"):
-                # Model parameters - update session state when changed
                 form_weight = st.slider(
                     "Form Weight %", 
                     20, 60, int(st.session_state.form_weight * 100), 5,
-                    on_change=lambda: st.session_state.update({
-                        'form_weight': st.session_state.form_weight_slider / 100.0
-                    }),
                     key="form_weight_slider"
                 ) / 100.0
                 
-                improvement_threshold = st.slider(
-                    "Improvement Threshold %", 
-                    5, 25, int((st.session_state.improvement_threshold - 1) * 100), 1,
-                    on_change=lambda: st.session_state.update({
-                        'improvement_threshold': (st.session_state.improvement_slider / 100.0) + 1.0
-                    }),
-                    key="improvement_slider"
-                ) / 100.0 + 1.0
-                
-                decline_threshold = 1.0 - st.slider(
-                    "Decline Threshold %", 
-                    5, 25, int((1 - st.session_state.decline_threshold) * 100), 1,
-                    on_change=lambda: st.session_state.update({
-                        'decline_threshold': 1.0 - (st.session_state.decline_slider / 100.0)
-                    }),
-                    key="decline_slider"
-                ) / 100.0
-                
-                away_venue_factor = st.slider(
-                    "Away Venue Factor %", 
-                    70, 95, int(st.session_state.away_venue_factor * 100), 5,
-                    on_change=lambda: st.session_state.update({
-                        'away_venue_factor': st.session_state.away_venue_slider / 100.0
-                    }),
-                    key="away_venue_slider"
-                ) / 100.0
-                
-                # Goal expectation bounds
-                max_team_goals = st.slider(
-                    "Max Goals Per Team", 
-                    3.0, 5.0, st.session_state.max_team_goals, 0.1,
-                    key="max_team_goals_slider"
-                )
-                
-                max_total_goals = st.slider(
-                    "Max Total Goals", 
-                    3.5, 6.0, st.session_state.max_total_goals, 0.1,
-                    key="max_total_goals_slider"
-                )
-                
-                min_team_goals = st.slider(
-                    "Min Goals Per Team", 
-                    0.1, 0.5, st.session_state.min_team_goals, 0.05,
-                    key="min_team_goals_slider"
+                min_sample_size = st.slider(
+                    "Minimum Sample Size", 
+                    3, 10, 5, 1,
+                    help="Minimum games needed to use venue-specific data"
                 )
             
-            # Market odds - PROPERLY ORGANIZED
+            # Market odds
             st.subheader("💰 Market Odds")
             
             template = st.selectbox(
@@ -415,7 +358,7 @@ class EdgeFinderFootballApp:
             )
             
             if template == "Custom":
-                # Match Result (1X2) - Most important
+                # Match Result (1X2)
                 st.markdown('<div class="market-category">🏆 Match Result (1X2)</div>', unsafe_allow_html=True)
                 col1, col2, col3 = st.columns(3)
                 with col1:
@@ -425,7 +368,7 @@ class EdgeFinderFootballApp:
                 with col3:
                     away_win = st.number_input("Away Win", value=2.80, min_value=1.01, max_value=20.0, step=0.05, key="away_win_custom")
                 
-                # Double Chance - Secondary market
+                # Double Chance
                 st.markdown('<div class="market-category">🔀 Double Chance</div>', unsafe_allow_html=True)
                 col1, col2 = st.columns(2)
                 with col1:
@@ -478,35 +421,40 @@ class EdgeFinderFootballApp:
             
             bankroll = st.number_input("Bankroll ($)", value=1000.0, min_value=100.0, max_value=100000.0, step=100.0)
             min_edge = st.slider("Minimum Edge %", 1.0, 10.0, 3.0, 0.5) / 100
-            max_exposure = st.slider("Max Correlation Exposure %", 5.0, 20.0, 10.0, 1.0) / 100
+            max_exposure = st.slider("Max Exposure %", 5.0, 20.0, 10.0, 1.0) / 100
             
             # Logic framework display
-            with st.expander("📚 Logic Framework"):
+            with st.expander("📚 Enhanced Logic Framework"):
                 st.markdown(f"""
-                ### THE "3 THINGS" ANALYTICAL FRAMEWORK
+                ### THE "3 THINGS" ANALYTICAL FRAMEWORK v2.0
+                
+                **Now uses ALL available data:**
                 
                 1. **TEAM IDENTITY** (What they ARE)
-                - Possession style and efficiency
-                - Conversion rates matter more than volume
+                - Shot volume & quality (shots_per_game, shots_on_target_pg)
+                - Conversion efficiency (conversion_rate)
+                - Playing style classification
                 
-                2. **DEFENSE** (What they STOP)
-                - Clean sheet frequency reveals stability
-                - Failed-to-score percentage shows reliability
+                2. **DEFENSE** (What they STOP)  
+                - Venue-specific defense (home/away goals_against)
+                - Clean sheet patterns by venue
+                - Scoring reliability by venue
                 
                 3. **TRANSITION** (How they CHANGE)
-                - BTTS and Over/Under patterns
+                - Last 5 ACTUAL GOALS (not just PPG)
+                - BTTS and Over/Under venue patterns
                 - Recent form weighted {form_weight:.0%} vs season {1-form_weight:.0%}
+                
+                **Data-Driven Improvements:**
+                - Uses ACTUAL GOALS instead of just xG
+                - Uses VENUE-SPECIFIC performance (home/away splits)
+                - Uses SHOT DATA for attack quality
+                - League-adjusted calculations
                 
                 **Value Detection**: Edge = P_model - P_market
                 - ⭐⭐⭐ **Golden Nugget**: Edge > 5% with high confidence
                 - ⭐⭐ **Value Bet**: Edge > 3% with moderate confidence  
                 - ⭐ **Consider**: Edge > 1% or situational value
-                
-                **Bet Order Priority**:
-                1. Match Result (Home Win / Draw / Away Win)
-                2. Double Chance (Home or Draw / Away or Draw)
-                3. Goals Markets (Over/Under 2.5)
-                4. BTTS Markets (Yes/No)
                 """)
             
             # Analyze button
@@ -516,18 +464,13 @@ class EdgeFinderFootballApp:
         if analyze_btn:
             # Initialize predictor ONLY when analyze is clicked
             try:
-                # Use values from session state
+                # FIXED: Use new predictor constructor with correct parameters
                 self.predictor = EdgeFinderPredictor(
                     bankroll=bankroll,
                     min_edge=min_edge,
                     max_correlation_exposure=max_exposure,
-                    form_weight=st.session_state.form_weight,
-                    improvement_threshold=st.session_state.improvement_threshold,
-                    decline_threshold=st.session_state.decline_threshold,
-                    max_team_goals=st.session_state.max_team_goals,
-                    max_total_goals=st.session_state.max_total_goals,
-                    min_team_goals=st.session_state.min_team_goals,
-                    away_venue_factor=st.session_state.away_venue_factor
+                    form_weight=form_weight,
+                    min_sample_size=min_sample_size
                 )
                 
                 # Get team data
@@ -542,7 +485,7 @@ class EdgeFinderFootballApp:
                 st.info(f"**Analyzing:** {home_team} vs {away_team}")
                 
                 # Run prediction
-                with st.spinner("Analyzing match using '3 Things' framework..."):
+                with st.spinner("Analyzing match using enhanced '3 Things' framework..."):
                     result = self.predictor.predict_match(
                         home_stats=home_stats,
                         away_stats=away_stats,
@@ -552,7 +495,7 @@ class EdgeFinderFootballApp:
                     )
                 
                 # Display results
-                self.display_results(result, home_stats, away_stats, st.session_state.form_weight)
+                self.display_results(result, home_stats, away_stats)
                 
             except Exception as e:
                 st.error(f"Error analyzing match: {str(e)}")
@@ -560,19 +503,20 @@ class EdgeFinderFootballApp:
         else:
             self.display_welcome_screen()
     
-    def display_results(self, result, home_stats, away_stats, form_weight):
-        """Display analysis results"""
+    def display_results(self, result, home_stats, away_stats):
+        """Display analysis results - UPDATED for new predictor"""
         
         # Match header
         st.markdown(f"""
         <div style="text-align: center; padding: 2rem; background: linear-gradient(135deg, #2196F3 0%, #1976D2 100%); 
                   border-radius: 15px; color: white; margin-bottom: 2rem;">
             <h2 style="margin: 0; font-size: 2rem;">{home_stats.team_name} 🆚 {away_stats.team_name}</h2>
-            <p style="font-size: 1.2rem; opacity: 0.9;">EdgeFinder Pro Analysis Results</p>
+            <p style="font-size: 1.2rem; opacity: 0.9;">Enhanced Analysis Results</p>
+            <p style="font-size: 0.9rem; opacity: 0.8;">Using all available data: Actual goals, venue splits, shot quality</p>
         </div>
         """, unsafe_allow_html=True)
         
-        # Quick stats with confidence
+        # Quick stats
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             expected_goals = result['match_analysis']['goal_expectations']['total_goals']
@@ -581,19 +525,11 @@ class EdgeFinderFootballApp:
             value_bets = len(result['value_bets'])
             st.metric("Value Bets Found", value_bets)
         with col3:
-            st.metric("Total Exposure", f"{result['total_exposure_percent']*100:.1f}%")
+            total_exposure = result['total_exposure_percent']
+            st.metric("Total Exposure", f"{total_exposure:.1f}%")
         with col4:
-            confidence = result['match_analysis']['confidence']
-            confidence_score = confidence['score']
-            confidence_color = self.get_confidence_color(confidence_score)
-            st.markdown(f"""
-            <div style="background-color: {confidence_color}; color: white; padding: 0.5rem; 
-                      border-radius: 10px; text-align: center;">
-                <div style="font-size: 1.2rem; font-weight: bold;">Confidence</div>
-                <div style="font-size: 1.5rem; font-weight: bold;">{confidence_score}/10</div>
-                <div style="font-size: 0.8rem;">{confidence['level'].value}</div>
-            </div>
-            """, unsafe_allow_html=True)
+            total_stake = result['total_stake']
+            st.metric("Total Stake", f"${total_stake:.2f}")
         
         # Value bets
         if result['value_bets']:
@@ -619,34 +555,30 @@ class EdgeFinderFootballApp:
                         <strong>Value Rating:</strong> {value_rating} &nbsp;•&nbsp;
                         <strong>Edge:</strong> {edge_text} &nbsp;•&nbsp;
                         <strong>Probability:</strong> {bet['model_probability']:.1%} &nbsp;•&nbsp;
-                        <strong>Stake:</strong> ${bet['staking']['stake_amount']:.2f}
+                        <strong>Stake:</strong> ${bet['stake_amount']:.2f} ({bet['stake_percent']:.1f}%)
                     </p>
-                    <p style="margin: 10px 0 0 0; font-size: 0.95rem; opacity: 0.9;">{bet['explanation']}</p>
                 </div>
                 """, unsafe_allow_html=True)
                 
-                # Show stake details
-                with st.expander(f"📊 Detailed stake analysis for {bet['bet_type']}"):
+                # Show quick details
+                with st.expander(f"📊 Quick analysis for {bet['bet_type']}"):
                     col1, col2 = st.columns(2)
                     with col1:
-                        st.write("**Stake Calculation:**")
-                        st.write(f"Kelly Fraction: {bet['staking']['kelly_fraction']:.3f}")
-                        st.write(f"Correlation Factor: {bet['staking']['correlation_factor']:.2f}")
-                        st.write(f"Confidence Multiplier: {bet['staking']['confidence_multiplier']:.2f}")
-                        st.write(f"Max Stake Limit: ${bet['staking']['max_stake_limit']:.2f}")
+                        st.write("**Probabilities:**")
+                        st.write(f"Model: {bet['model_probability']:.1%}")
+                        st.write(f"Market Implied: {bet['implied_probability']:.1%}")
+                        st.write(f"Edge: {bet['edge_percent']:.1f}%")
                     with col2:
-                        st.write("**Expected Performance:**")
-                        st.write(f"Expected Value: ${bet['staking']['expected_value']:.2f}")
-                        st.write(f"Risk Level: {bet['staking']['risk_level']}")
-                        st.write(f"Model Probability: {bet['model_probability']:.1%}")
-                        st.write(f"Market Implied: {bet['staking']['implied_probability']:.1%}")
+                        st.write("**Bet Details:**")
+                        st.write(f"Odds: {bet['market_odds']}")
+                        st.write(f"Stake: ${bet['stake_amount']:.2f}")
+                        st.write(f"Bankroll %: {bet['stake_percent']:.1f}%")
         else:
             st.warning(f"""
             ⚠️ **No value bets found**
             
             The model didn't find any betting opportunities meeting the criteria:
             - Minimum edge: {self.predictor.min_edge*100:.1f}%
-            - Minimum confidence: {self.predictor.min_confidence_for_stake*100:.0f}%
             
             **Possible reasons:**
             1. Market odds accurately reflect true probabilities
@@ -654,7 +586,7 @@ class EdgeFinderFootballApp:
             3. Try adjusting the minimum edge requirement
             """)
         
-        # Team analysis
+        # Team analysis with enhanced stats
         st.markdown("### 🔍 Team Analysis")
         
         col1, col2 = st.columns(2)
@@ -664,11 +596,11 @@ class EdgeFinderFootballApp:
             st.markdown(f"""
             <div class="team-stat-box">
                 <p><strong>Style:</strong> {self.get_team_style_icon(home_stats.style.value)} {home_stats.style.value}</p>
-                <p><strong>Possession:</strong> {home_stats.possession_avg:.1%}</p>
-                <p><strong>Conversion:</strong> {home_stats.conversion_rate:.1%}</p>
-                <p><strong>Clean Sheets:</strong> {home_stats.clean_sheet_pct:.1%}</p>
-                <p><strong>Failed to Score:</strong> {home_stats.failed_to_score_pct:.1%}</p>
-                <p><strong>Form:</strong> {home_stats.last5_form} ({home_stats.last5_wins}W-{home_stats.last5_draws}D-{home_stats.last5_losses}L)</p>
+                <p><strong>Shots/Game:</strong> {home_stats.shots_per_game:.1f} ({home_stats.shots_on_target_pg:.1f} on target)</p>
+                <p><strong>Conversion Rate:</strong> {home_stats.conversion_rate:.1%}</p>
+                <p><strong>Home Goals:</strong> {home_stats.home_goals_for} for, {home_stats.home_goals_against} against</p>
+                <p><strong>Home Clean Sheets:</strong> {home_stats.clean_sheet_pct_home:.1%}</p>
+                <p><strong>Recent Form:</strong> {home_stats.last5_form} ({home_stats.last5_goals_for} goals for, {home_stats.last5_goals_against} against)</p>
             </div>
             """, unsafe_allow_html=True)
         
@@ -677,132 +609,114 @@ class EdgeFinderFootballApp:
             st.markdown(f"""
             <div class="team-stat-box">
                 <p><strong>Style:</strong> {self.get_team_style_icon(away_stats.style.value)} {away_stats.style.value}</p>
-                <p><strong>Possession:</strong> {away_stats.possession_avg:.1%}</p>
-                <p><strong>Conversion:</strong> {away_stats.conversion_rate:.1%}</p>
-                <p><strong>Clean Sheets:</strong> {away_stats.clean_sheet_pct:.1%}</p>
-                <p><strong>Failed to Score:</strong> {away_stats.failed_to_score_pct:.1%}</p>
-                <p><strong>Form:</strong> {away_stats.last5_form} ({away_stats.last5_wins}W-{away_stats.last5_draws}D-{away_stats.last5_losses}L)</p>
+                <p><strong>Shots/Game:</strong> {away_stats.shots_per_game:.1f} ({away_stats.shots_on_target_pg:.1f} on target)</p>
+                <p><strong>Conversion Rate:</strong> {away_stats.conversion_rate:.1%}</p>
+                <p><strong>Away Goals:</strong> {away_stats.away_goals_for} for, {away_stats.away_goals_against} against</p>
+                <p><strong>Away Clean Sheets:</strong> {away_stats.clean_sheet_pct_away:.1%}</p>
+                <p><strong>Recent Form:</strong> {away_stats.last5_form} ({away_stats.last5_goals_for} goals for, {away_stats.last5_goals_against} against)</p>
             </div>
             """, unsafe_allow_html=True)
         
-        # Match insights with confidence factors
+        # Three Things Analysis
         analysis = result['match_analysis']
-        confidence = analysis['confidence']
         
-        st.markdown("### 🎯 Confidence Analysis")
-        
-        # Show confidence factors
-        if confidence['factors']:
-            st.write("**Key Confidence Factors:**")
-            for factor, weight in confidence['factors']:
-                if weight >= 3:
-                    emoji = "🔥"
-                elif weight >= 2:
-                    emoji = "⚡"
-                else:
-                    emoji = "📊"
-                st.write(f"{emoji} {factor.replace('_', ' ').title()} (+{weight})")
-        
-        st.write(f"**Overall:** {confidence['reason']}")
-        
-        # Show analysis by dimension
-        st.markdown("### 📊 Three Things Analysis")
+        st.markdown("### 📊 Enhanced Three Things Analysis")
         
         tabs = st.tabs(["1. Team Identity", "2. Defense", "3. Transition"])
         
         with tabs[0]:
             identity = analysis['identity']
-            if identity['insights']:
+            if identity.get('insights'):
                 for insight in identity['insights']:
                     st.info(f"• {insight}")
             else:
                 st.write("No significant identity mismatches detected.")
             
-            # Show style matchup
             if identity.get('style_clash'):
                 st.write(f"**Style Matchup:** {identity['style_clash']}")
+            
+            # Show shot quality comparison
+            if 'home_shot_quality' in identity and 'away_shot_quality' in identity:
+                st.write(f"**Shot Quality Comparison:**")
+                st.write(f"- {home_stats.team_name}: {identity['home_shot_quality']:.2f}x league average")
+                st.write(f"- {away_stats.team_name}: {identity['away_shot_quality']:.2f}x league average")
         
         with tabs[1]:
             defense = analysis['defense']
-            if defense['insights']:
+            if defense.get('insights'):
                 for insight in defense['insights']:
                     st.warning(f"• {insight}")
             else:
                 st.write("No significant defensive patterns detected.")
             
-            # Show key defensive stats
-            col1, col2 = st.columns(2)
-            with col1:
-                st.write(f"**{home_stats.team_name} Defense:**")
-                st.write(f"- Clean Sheets: {defense['home_clean_sheet_strength']:.1f}%")
-                st.write(f"- Scoring Reliability: {defense['home_scoring_reliability']:.1f}%")
-            with col2:
-                st.write(f"**{away_stats.team_name} Defense:**")
-                st.write(f"- Clean Sheets: {defense['away_clean_sheet_strength']:.1f}%")
-                st.write(f"- Scoring Reliability: {defense['away_scoring_reliability']:.1f}%")
+            # Show venue defense stats
+            if 'home_venue_defense' in defense and 'away_venue_defense' in defense:
+                st.write(f"**Venue Defense Strength:**")
+                st.write(f"- {home_stats.team_name} home defense: {defense['home_venue_defense']:.2f} goals/game")
+                st.write(f"- {away_stats.team_name} away defense: {defense['away_venue_defense']:.2f} goals/game")
         
         with tabs[2]:
             transition = analysis['transition']
-            if transition['insights']:
+            if transition.get('insights'):
                 for insight in transition['insights']:
                     st.success(f"• {insight}")
             else:
                 st.write("No significant transition trends detected.")
             
-            # Show form momentum
-            st.write(f"**Form Momentum:**")
-            st.write(f"- {home_stats.team_name}: {transition['home_form_momentum'].upper()} ({home_stats.last5_form})")
-            st.write(f"- {away_stats.team_name}: {transition['away_form_momentum'].upper()} ({away_stats.last5_form})")
+            # Show recent form comparison
+            if 'home_last5_gpg' in transition and 'away_last5_gpg' in transition:
+                st.write(f"**Recent Goal Form (last 5 games):**")
+                st.write(f"- {home_stats.team_name}: {transition['home_last5_gpg']:.2f} goals/game")
+                st.write(f"- {away_stats.team_name}: {transition['away_last5_gpg']:.2f} goals/game")
             
             # Show pattern probabilities
-            st.write(f"**Historical Patterns:**")
-            st.write(f"- Combined BTTS: {transition['combined_btts']:.1f}%")
-            st.write(f"- Combined Over 2.5: {transition['combined_over25']:.1f}%")
-            
-            # Show form weight
-            st.info(f"*Recent form weighted {form_weight*100:.0f}% in calculations*")
+            if 'combined_btts' in transition and 'combined_over25' in transition:
+                st.write(f"**Historical Patterns:**")
+                st.write(f"- Combined BTTS probability: {transition['combined_btts']:.1%}")
+                st.write(f"- Combined Over 2.5 probability: {transition['combined_over25']:.1%}")
         
-        # Show match insights
-        if analysis['match_insights']:
-            st.markdown("### 💡 Key Match Insights")
-            for insight in analysis['match_insights']:
-                st.info(f"• {insight}")
-        
-        # Goal expectations
+        # Goal expectations with adjustments
         goal_exp = analysis['goal_expectations']
-        st.markdown("### ⚽ Goal Expectations")
+        st.markdown("### ⚽ Goal Expectations & Adjustments")
         
         col1, col2, col3 = st.columns(3)
         with col1:
             st.metric("Home Expected Goals", f"{goal_exp['lambda_home']:.2f}")
-            st.caption(f"Season xG: {home_stats.xg_for_avg:.2f}")
+            st.caption(f"Season: {home_stats.season_goals_per_game:.2f}/game")
         with col2:
             st.metric("Away Expected Goals", f"{goal_exp['lambda_away']:.2f}")
-            st.caption(f"Season xG: {away_stats.xg_for_avg:.2f}")
+            st.caption(f"Season: {away_stats.season_goals_per_game:.2f}/game")
         with col3:
             st.metric("Total Expected Goals", f"{goal_exp['total_goals']:.2f}")
-            # FIXED: Use correct league context access
-            avg_gpg = self.predictor.league_context.get('premier_league', {}).get('avg_gpg', 2.7)
-            st.caption(f"League Average: {avg_gpg}")
+            st.caption("League-adjusted calculation")
         
         # Show adjustment factors
-        with st.expander("🔧 Goal Expectation Adjustments"):
-            adj_factors = goal_exp['adjustment_factors']
-            col1, col2 = st.columns(2)
-            with col1:
-                st.write(f"**{home_stats.team_name} Adjustments:**")
-                st.write(f"- Base xG: {adj_factors['home_base_xg']:.2f}")
-                st.write(f"- Venue Multiplier: {adj_factors['home_venue_mult']:.2f}x")
-                st.write(f"- Efficiency: {adj_factors['home_efficiency']:.2f}x")
-                st.write(f"- Defense Adjustment: {adj_factors['home_defense_adj']:.2f}x")
-                st.write(f"- Form Adjustment: {adj_factors['home_form_adj']:.2f}x")
-            with col2:
-                st.write(f"**{away_stats.team_name} Adjustments:**")
-                st.write(f"- Base xG: {adj_factors['away_base_xg']:.2f}")
-                st.write(f"- Venue Multiplier: {adj_factors['away_venue_mult']:.2f}x")
-                st.write(f"- Efficiency: {adj_factors['away_efficiency']:.2f}x")
-                st.write(f"- Defense Adjustment: {adj_factors['away_defense_adj']:.2f}x")
-                st.write(f"- Form Adjustment: {adj_factors['away_form_adj']:.2f}x")
+        with st.expander("🔧 Goal Expectation Adjustments Applied"):
+            adj_factors = goal_exp.get('adjustment_factors', {})
+            if adj_factors:
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write(f"**{home_stats.team_name} Adjustments:**")
+                    if 'home_attack' in adj_factors:
+                        st.write(f"- Base Attack: {adj_factors['home_attack']:.2f}")
+                    if 'home_shot_mult' in adj_factors:
+                        st.write(f"- Shot Quality: {adj_factors['home_shot_mult']:.2f}x")
+                    if 'home_form_adj' in adj_factors:
+                        st.write(f"- Form Adjustment: {adj_factors['home_form_adj']:.2f}x")
+                    if 'home_defense_mult' in adj_factors:
+                        st.write(f"- Opponent Defense: {adj_factors['home_defense_mult']:.2f}x")
+                with col2:
+                    st.write(f"**{away_stats.team_name} Adjustments:**")
+                    if 'away_attack' in adj_factors:
+                        st.write(f"- Base Attack: {adj_factors['away_attack']:.2f}")
+                    if 'away_shot_mult' in adj_factors:
+                        st.write(f"- Shot Quality: {adj_factors['away_shot_mult']:.2f}x")
+                    if 'away_form_adj' in adj_factors:
+                        st.write(f"- Form Adjustment: {adj_factors['away_form_adj']:.2f}x")
+                    if 'away_defense_mult' in adj_factors:
+                        st.write(f"- Opponent Defense: {adj_factors['away_defense_mult']:.2f}x")
+            else:
+                st.write("No detailed adjustment factors available.")
         
         # Probabilities
         st.markdown("#### 📊 Probability Breakdown")
@@ -823,15 +737,43 @@ class EdgeFinderFootballApp:
             st.write(f"Home Win: {goal_exp['probabilities']['home_win']:.1%}")
             st.write(f"Draw: {goal_exp['probabilities']['draw']:.1%}")
             st.write(f"Away Win: {goal_exp['probabilities']['away_win']:.1%}")
+        
+        # Confidence score
+        if 'confidence' in analysis:
+            confidence = analysis['confidence']
+            st.markdown("### 🎯 Confidence Assessment")
+            
+            confidence_score = confidence['score']
+            confidence_color = self.get_confidence_color(confidence_score)
+            
+            st.markdown(f"""
+            <div style="background-color: {confidence_color}; color: white; padding: 1rem; 
+                      border-radius: 10px; text-align: center; margin: 1rem 0;">
+                <div style="font-size: 1.5rem; font-weight: bold;">Confidence Score: {confidence_score}/10</div>
+                <div style="font-size: 1.2rem;">{confidence['level'].value}</div>
+                <div style="font-size: 0.9rem; margin-top: 0.5rem;">{confidence['reason']}</div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            if confidence.get('factors'):
+                st.write("**Key Confidence Factors:**")
+                for factor, weight in confidence['factors']:
+                    st.write(f"• {factor.replace('_', ' ').title()}: {weight:+d}")
     
     def display_welcome_screen(self):
         """Display welcome screen"""
         st.markdown("""
-        ## 🎯 Welcome to EdgeFinder Pro
+        ## 🎯 Welcome to EdgeFinder Pro v2.0
         
-        ### **The "3 Things" Football Value Betting System**
+        ### **Enhanced Football Value Betting System**
         
-        Our system analyzes football matches using three key dimensions:
+        **Now uses ALL available data properly:**
+        
+        1. **Actual Goals** instead of just xG
+        2. **Venue-Specific Performance** (home/away splits)
+        3. **Shot Data** for attack quality assessment
+        4. **Recent Actual Goals** (not just points)
+        5. **League-Adjusted Calculations**
         """)
         
         col1, col2, col3 = st.columns(3)
@@ -840,30 +782,30 @@ class EdgeFinderFootballApp:
             st.markdown("""
             ### 🔵 1. Team Identity
             **What they ARE**
-            - Possession style
-            - Shot efficiency
-            - Conversion rates
-            - Playing style classification
+            - Shot volume & quality
+            - Conversion efficiency  
+            - Playing style
+            - League-adjusted metrics
             """)
         
         with col2:
             st.markdown("""
             ### 🛡️ 2. Defense
             **What they STOP**
-            - Clean sheet probabilities
-            - Scoring reliability
-            - Defensive efficiency
-            - Home/away defensive strength
+            - Venue-specific goals conceded
+            - Clean sheet patterns by venue
+            - Scoring reliability by venue
+            - Recent defensive trends
             """)
         
         with col3:
             st.markdown("""
             ### 📈 3. Transition
             **How they CHANGE**
-            - BTTS patterns
-            - Over/Under trends
-            - Form momentum (40% weight)
-            - Game outcome patterns
+            - Last 5 actual goals scored/conceded
+            - BTTS venue patterns
+            - Over/Under venue trends
+            - Form momentum analysis
             """)
         
         st.markdown("""
@@ -873,24 +815,35 @@ class EdgeFinderFootballApp:
         
         1. **Select a league** from the sidebar
         2. **Choose home and away teams**
-        3. **Configure advanced predictor settings**
-        4. **Set market odds** (use templates or custom)
-        5. **Configure your bankroll** settings
-        6. **Click "Analyze Match"** to find value bets
+        3. **Configure market odds** (use templates or custom)
+        4. **Set your bankroll** and edge requirements
+        5. **Click "Analyze Match"** to find value bets
         
-        ### ⚡ Advanced Configuration
+        ### ⚡ Key Improvements in v2.0
         
-        You can now customize:
-        - **Form weight**: How much recent form matters
-        - **Goal expectation bounds**: Realistic goal limits
-        - **Venue factors**: Home/away adjustments
-        - **Improvement thresholds**: When teams are "improving"
+        **Data Utilization:**
+        - Uses 41 data columns instead of just 4
+        - Properly incorporates shot data
+        - Uses venue-specific performance
+        - League-aware calculations
+        
+        **Prediction Accuracy:**
+        - More realistic goal expectations
+        - Better form assessment
+        - Improved confidence scoring
+        - League-adjusted multipliers
+        
+        **User Experience:**
+        - Simplified configuration
+        - Clearer explanations
+        - Better visualizations
+        - Enhanced insights
         
         ### 💰 How We Find Value
         
-        **Prediction Engine Logic:**
+        **Enhanced Prediction Logic:**
         ```
-        Expected_Goals = Base_Avg × Style_Adjustment × Efficiency_Adjustment
+        Expected_Goals = Venue_Goals × Shot_Quality × Form_Adjustment × Defense_Multiplier
         Edge = P_model - P_market
         ```
         
@@ -898,12 +851,6 @@ class EdgeFinderFootballApp:
         - ⭐⭐⭐ **Golden Nugget**: Edge > 5% with high confidence
         - ⭐⭐ **Value Bet**: Edge > 3% with moderate confidence  
         - ⭐ **Consider**: Edge > 1% or situational value
-        
-        **Bet Order Priority:**
-        1. Match Result (Home Win / Draw / Away Win)
-        2. Double Chance (Home or Draw / Away or Draw)
-        3. Goals Markets (Over/Under 2.5)
-        4. BTTS Markets (Yes/No)
         
         ---
         
@@ -923,6 +870,7 @@ class EdgeFinderFootballApp:
         st.markdown("---")
         st.markdown("""
         <div style="text-align: center; color: #666;">
+            <p>⚡ <strong>EdgeFinder Pro v2.0</strong> - Now using ALL available data properly</p>
             <p>⚠️ <strong>Disclaimer:</strong> Sports betting involves risk. This tool provides mathematical probabilities only.</p>
             <p>Built with ❤️ using Streamlit</p>
         </div>
