@@ -265,8 +265,8 @@ class EdgeFinderPredictor:
     
     def _get_venue_attack_strength(self, stats: EnhancedTeamStats, is_home: bool, league: str = "default") -> float:
         """
-        Get venue-specific attack strength with LEAGUE-SPECIFIC bounds
-        Mathematically correct for all teams
+        Get venue-specific attack strength - NO ARTIFICIAL MINIMUMS
+        Use REAL data from CSV
         """
         if is_home:
             games = stats.home_games_played
@@ -281,17 +281,14 @@ class EdgeFinderPredictor:
         else:
             gpg = stats.season_goals_per_game
         
-        # Apply league-specific bounds
-        context = self.league_contexts.get(league, self.league_contexts['default'])
-        min_attack = context.get('min_attack', 0.6)
-        max_attack = context.get('max_attack', 2.8)
-        
-        return max(min_attack, min(max_attack, gpg))
+        # NO ARTIFICIAL MINIMUMS - Use real data
+        # Only apply maximum bound to prevent extreme outliers
+        return min(3.0, gpg)  # No minimum, just cap at 3.0
     
     def _get_venue_defense_strength(self, stats: EnhancedTeamStats, is_home: bool, league: str = "default") -> float:
         """
-        Get venue-specific defense strength with LEAGUE-SPECIFIC bounds
-        Mathematically correct for all teams
+        Get venue-specific defense strength - NO ARTIFICIAL MINIMUMS
+        Use REAL data from CSV
         """
         if is_home:
             games = stats.home_games_played
@@ -306,27 +303,16 @@ class EdgeFinderPredictor:
         else:
             gapg = stats.season_goals_conceded_per_game
         
-        # Apply league-specific bounds
-        context = self.league_contexts.get(league, self.league_contexts['default'])
-        min_defense = context.get('min_defense', 0.6)
-        max_defense = context.get('max_defense', 2.5)
-        
-        return max(min_defense, min(max_defense, gapg))
+        # NO ARTIFICIAL MINIMUMS - Use real data
+        # Only apply maximum bound to prevent extreme outliers
+        return min(3.0, gapg)  # No minimum, just cap at 3.0
     
     def _calculate_attack_vs_defense_adjustment(self, attack_strength: float,
                                               opponent_defense: float,
                                               league_avg_gpg: float) -> float:
         """
         MATHEMATICALLY CORRECT attack vs defense adjustment
-        Works for ALL matchups in ALL leagues
-        
-        Formula: attack_multiplier = 1.0 + (defense_quality - 1.0) * 0.5
-        Where: defense_quality = opponent_defense / league_avg_gpg
-        
-        Examples:
-        - Good defense (0.5x league avg): 1.0 + (0.5 - 1.0) * 0.5 = 0.75 (attack reduced 25%)
-        - Average defense (1.0x): 1.0 + (1.0 - 1.0) * 0.5 = 1.0 (no change)
-        - Bad defense (1.5x): 1.0 + (1.5 - 1.0) * 0.5 = 1.25 (attack increased 25%)
+        Handles ALL cases including very low defense values
         """
         if opponent_defense <= 0.1 or league_avg_gpg <= 0.1:
             return attack_strength
@@ -334,11 +320,16 @@ class EdgeFinderPredictor:
         # Calculate defense quality relative to league average
         defense_quality = opponent_defense / league_avg_gpg
         
-        # Apply smooth, bounded adjustment
-        attack_multiplier = 1.0 + (defense_quality - 1.0) * 0.5
+        # Handle VERY GOOD defenses (defense_quality < 0.5) gracefully
+        if defense_quality < 0.3:
+            # Extremely good defense - cap at 0.5x multiplier
+            attack_multiplier = 0.5
+        else:
+            # Normal calculation for reasonable defenses
+            attack_multiplier = 1.0 + (defense_quality - 1.0) * 0.5
         
-        # Apply realistic bounds
-        attack_multiplier = max(0.5, min(1.5, attack_multiplier))
+        # Apply final bounds
+        attack_multiplier = max(0.4, min(1.6, attack_multiplier))
         
         return attack_strength * attack_multiplier
     
