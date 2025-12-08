@@ -327,10 +327,10 @@ class EdgeFinderPredictor:
         home_defense_mult = league_avg / away_defense if away_defense > 0 else 1.0
         away_defense_mult = league_avg / home_defense if home_defense > 0 else 1.0
         
-        # 6. EFFICIENCY ADJUSTMENT (conversion rate)
+        # 6. EFFICIENCY ADJUSTMENT (conversion rate) - BUG FIXED HERE
         avg_conversion = 0.11  # League average conversion rate
-        home_efficiency = stats.conversion_rate / avg_conversion if avg_conversion > 0 else 1.0
-        away_efficiency = stats.conversion_rate / avg_conversion if avg_conversion > 0 else 1.0
+        home_efficiency = home_stats.conversion_rate / avg_conversion if avg_conversion > 0 else 1.0
+        away_efficiency = away_stats.conversion_rate / avg_conversion if avg_conversion > 0 else 1.0
         
         # 7. STYLE ADJUSTMENT
         style_key = (home_stats.style, away_stats.style)
@@ -393,7 +393,9 @@ class EdgeFinderPredictor:
                 'home_defense_mult': home_defense_mult,
                 'away_defense_mult': away_defense_mult,
                 'home_defense': home_defense,
-                'away_defense': away_defense
+                'away_defense': away_defense,
+                'home_efficiency': home_efficiency,
+                'away_efficiency': away_efficiency
             }
         }
     
@@ -722,7 +724,8 @@ class EdgeFinderPredictor:
                     'edge_percent': bet['edge_percent'],
                     'value_rating': bet['value_rating'],
                     'stake_amount': stake_amount,
-                    'stake_percent': stake_pct * 100
+                    'stake_percent': stake_pct * 100,
+                    'implied_probability': bet['implied_probability']
                 }
                 final_bets.append(final_bet)
         
