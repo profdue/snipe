@@ -514,9 +514,9 @@ class EdgeFinderFootballApp:
                 home_stats = self.create_team_stats(home_data)
                 away_stats = self.create_team_stats(away_data)
                 
-                # DEBUG: Check raw data from CSV
+                # DEBUG: Check raw data from CSV - FIXED LABELS
                 with st.expander("🐛 DEBUG: Raw CSV Data"):
-                    st.write(f"**Pisa data from CSV:**")
+                    st.write(f"**{home_team} data from CSV:**")
                     st.write(f"home_wins: {home_data.get('home_wins', 'N/A')}")
                     st.write(f"home_draws: {home_data.get('home_draws', 'N/A')}")
                     st.write(f"home_losses: {home_data.get('home_losses', 'N/A')}")
@@ -524,11 +524,25 @@ class EdgeFinderFootballApp:
                     st.write(f"home_goals_against: {home_data.get('home_goals_against', 'N/A')}")
                     
                     st.write(f"**Calculated:**")
-                    st.write(f"Pisa home_games_played = {home_stats.home_games_played}")
-                    st.write(f"Pisa home_goals_for = {home_stats.home_goals_for}")
-                    st.write(f"Pisa home_goals_against = {home_stats.home_goals_against}")
-                    st.write(f"Pisa home attack = {home_stats.home_goals_for / home_stats.home_games_played:.2f} goals/game")
-                    st.write(f"Pisa home defense = {home_stats.home_goals_against / home_stats.home_games_played:.2f} conceded/game")
+                    st.write(f"{home_team} home_games_played = {home_stats.home_games_played}")
+                    st.write(f"{home_team} home_goals_for = {home_stats.home_goals_for}")
+                    st.write(f"{home_team} home_goals_against = {home_stats.home_goals_against}")
+                    st.write(f"{home_team} home attack = {home_stats.home_goals_for / home_stats.home_games_played:.2f} goals/game")
+                    st.write(f"{home_team} home defense = {home_stats.home_goals_against / home_stats.home_games_played:.2f} conceded/game")
+                    
+                    st.write(f"**{away_team} data from CSV:**")
+                    st.write(f"away_wins: {away_data.get('away_wins', 'N/A')}")
+                    st.write(f"away_draws: {away_data.get('away_draws', 'N/A')}")
+                    st.write(f"away_losses: {away_data.get('away_losses', 'N/A')}")
+                    st.write(f"away_goals_for: {away_data.get('away_goals_for', 'N/A')}")
+                    st.write(f"away_goals_against: {away_data.get('away_goals_against', 'N/A')}")
+                    
+                    st.write(f"**Calculated:**")
+                    st.write(f"{away_team} away_games_played = {away_stats.away_games_played}")
+                    st.write(f"{away_team} away_goals_for = {away_stats.away_goals_for}")
+                    st.write(f"{away_team} away_goals_against = {away_stats.away_goals_against}")
+                    st.write(f"{away_team} away attack = {away_stats.away_goals_for / away_stats.away_games_played:.2f} goals/game")
+                    st.write(f"{away_team} away defense = {away_stats.away_goals_against / away_stats.away_games_played:.2f} conceded/game")
                 
                 # Display team info
                 st.info(f"**Analyzing:** {home_team} vs {away_team} in {self.leagues[selected_league]['name']}")
@@ -557,7 +571,7 @@ class EdgeFinderFootballApp:
         
         # Match header
         st.markdown(f"""
-        <div style="text-align: center; padding: 2rem; background: linear-gradient(135deg, #2196F3 0%, #1976D32 100%); 
+        <div style="text-align: center; padding: 2rem; background: linear-gradient(135deg, #2196F3 0%, #1976D2 100%); 
                   border-radius: 15px; color: white; margin-bottom: 2rem;">
             <h2 style="margin: 0; font-size: 2rem;">{home_stats.team_name} 🆚 {away_stats.team_name}</h2>
             <p style="font-size: 1.2rem; opacity: 0.9;">Fixed Analysis Results - v2.1</p>
@@ -684,7 +698,7 @@ class EdgeFinderFootballApp:
         col1, col2 = st.columns(2)
         
         with col1:
-            # CORRECTED: Calculate actual home attack from stats
+            # Calculate actual home attack from stats
             home_attack_calculated = home_stats.home_goals_for / home_stats.home_games_played if home_stats.home_games_played > 0 else 0
             home_defense_calculated = home_stats.home_goals_against / home_stats.home_games_played if home_stats.home_games_played > 0 else 0
             
@@ -708,7 +722,7 @@ class EdgeFinderFootballApp:
                 st.write(f"home_attack_adjusted from predictor: {adj_factors.get('home_attack_adjusted', 'N/A')}")
         
         with col2:
-            # CORRECTED: Calculate actual away attack from stats
+            # Calculate actual away attack from stats
             away_attack_calculated = away_stats.away_goals_for / away_stats.away_games_played if away_stats.away_games_played > 0 else 0
             away_defense_calculated = away_stats.away_goals_against / away_stats.away_games_played if away_stats.away_games_played > 0 else 0
             
@@ -790,7 +804,6 @@ class EdgeFinderFootballApp:
         col1, col2, col3 = st.columns(3)
         with col1:
             st.metric("Home Expected Goals", f"{goal_exp['lambda_home']:.2f}")
-            # FIXED: Show actual calculation, not adjusted_factors value
             home_base = adj_factors.get('home_attack', 0)
             st.caption(f"From: {home_base:.2f} × adjustments")
         with col2:
